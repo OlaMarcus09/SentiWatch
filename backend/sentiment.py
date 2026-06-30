@@ -7,7 +7,7 @@ from typing import Dict, Any
 from groq import Groq
 from dotenv import load_dotenv
 
-from database import supabase
+from database import supabase_admin
 from constants import VALID_CATEGORIES, VALID_RISKS, VALID_SENTIMENTS
 
 load_dotenv()
@@ -111,7 +111,7 @@ def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
 
     # 1. Fetch IDs of mentions that already have a sentiment score
     processed_res = (
-        supabase
+        supabase_admin
         .table("sentiment_results")
         .select("mention_id")
         .execute()
@@ -119,7 +119,7 @@ def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
     processed_ids = [row["mention_id"] for row in processed_res.data]
 
     # 2. Build the base query — filter by entity_id if provided
-    query = supabase.table("mentions").select("*")
+    query = supabase_admin.table("mentions").select("*")
 
     if entity_id:
         query = query.eq("entity_id", entity_id)
@@ -162,7 +162,17 @@ def save_sentiment(mention_id: str, result: Dict[str, Any]):
         "risk_level": result["risk"],
         "reason": result["reason"]
     }
-    supabase.table("sentiment_results").insert(payload).execute()
+
+    response = supabase_admin.table("sentiment_results").insert(payload).execute()
+
+    # supabase-py doesn't always raise on a failed/blocked write — it can
+    # just come back with empty data. Check explicitly so a silent RLS
+    # rejection doesn't get logged and counted as "processed".
+    if not getattr(response, "data", None):
+        raise Exception(
+            f"sentiment_results insert returned no data for mention {mention_id} "
+            f"(response: {response})"
+        )
 
 
 def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None):
