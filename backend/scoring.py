@@ -212,7 +212,11 @@ def mention_score(
 
         return 0
 
-    score = abs(sentiment_value)
+    # NOTE: do NOT abs() this. sentiment_value is signed on purpose —
+    # negative mentions (+10) push raw_score up, positive mentions (-8)
+    # pull raw_score down. Stripping the sign here was the bug: it made
+    # positive mentions add risk instead of reducing it.
+    score = sentiment_value
 
     score *= severity_weight(severity)
 
