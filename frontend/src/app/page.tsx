@@ -618,7 +618,7 @@ function Dashboard() {
                             <>
                               <span className="text-gray-300 dark:text-slate-600">•</span>
                               <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full">
-                                category.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())
+                                category.replace(/_/g, ' ').replace(/\b\w/g, (l: string) = l.toUpperCase())
                               </span>
                             </>
                           )}
