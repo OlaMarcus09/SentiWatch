@@ -6,7 +6,7 @@ real reputation risk score.
 
 The score is based on:
 
-- sentiment
+- sentiment (signed: positive reduces risk, negative increases)
 - severity
 - confidence
 - source credibility
@@ -20,6 +20,7 @@ Final score is normalized to 0–100.
 
 from datetime import datetime, timezone
 from math import exp
+from collections import Counter
 
 from constants import (
     SOURCE_WEIGHTS,
@@ -125,38 +126,23 @@ def recency_weight(created_at):
     """
     Exponential decay.
 
-    Today
-
-    = 1.0
-
-    30 days
-
-    ≈0.60
-
-    90 days
-
-    ≈0.22
-
+    Today    = 1.0
+    30 days  ≈ 0.60
+    90 days  ≈ 0.22
     """
 
     if not created_at:
-
         return 1
 
     try:
-
         created = datetime.fromisoformat(
             created_at.replace("Z", "+00:00")
         )
-
     except:
-
         return 1
 
     now = datetime.now(timezone.utc)
-
     age = (now - created).days
-
     decay = exp(-age / 60)
 
     return max(0.20, decay)
@@ -183,6 +169,7 @@ def volume_multiplier(count):
 
 # -----------------------------------------------------
 # Mention Score
+# 🔥 FIXED: Removed abs() — positive now REDUCES risk!
 # -----------------------------------------------------
 
 def mention_score(
@@ -209,10 +196,10 @@ def mention_score(
     )
 
     if sentiment_value == 0:
-
         return 0
 
-    score = abs(sentiment_value)
+    # ✅ CORRECT: Keep the sign — positive reduces risk, negative increases
+    score = sentiment_value  # Was: abs(sentiment_value) — THIS WAS THE BUG!
 
     score *= severity_weight(severity)
 
@@ -236,10 +223,7 @@ def mention_score(
 def normalize(score):
 
     """
-    Converts raw score into
-
-    0–100
-
+    Converts raw score into 0–100
     """
 
     normalized = round(score)
@@ -277,12 +261,13 @@ def score_status(score):
 
 
 # -----------------------------------------------------
-# Final Entity Score
+# Final Entity Score (with root cause analysis)
 # -----------------------------------------------------
 
 def calculate_entity_score(mentions):
     """
     Calculates final risk metrics and isolates the primary driver of reputation risk.
+    Also returns a breakdown by category for the dashboard heatmap.
     """
     if not mentions:
         return {
@@ -291,7 +276,9 @@ def calculate_entity_score(mentions):
             "negative_mentions": 0,
             "positive_mentions": 0,
             "neutral_mentions": 0,
-            "primary_trigger_category": "general"
+            "primary_trigger_category": "general",
+            "category_breakdown": {},
+            "root_cause_summary": "No data available."
         }
 
     raw_score = 0
@@ -299,22 +286,43 @@ def calculate_entity_score(mentions):
     positives = 0
     neutrals = 0
     
-    # Track the highest severity category to find the root cause
+    # Track category breakdown for heatmap
+    category_breakdown = {}
+    category_severity = {}
+    root_causes = []
+    
+    # Track highest severity category
     highest_severity = -1
     primary_trigger_category = "general"
+    primary_root_cause = ""
 
     for mention in mentions:
-        # Extract sentiment label correctly from our merged state
         sentiment = mention.get("label", "neutral")
+        category = mention.get("category", "general").strip().lower()
+        severity = int(mention.get("severity", 5))
+        risk_level = mention.get("risk_level", "low")
+        root_cause = mention.get("reason", "No specific cause identified")
 
         if sentiment == "negative":
             negatives += 1
             
-            # Isolate root cause category
-            current_severity = int(mention.get("severity", 5))
-            if current_severity > highest_severity:
-                highest_severity = current_severity
-                primary_trigger_category = mention.get("category", "general").strip().lower()
+            # Track category breakdown
+            category_breakdown[category] = category_breakdown.get(category, 0) + 1
+            category_severity[category] = max(category_severity.get(category, 0), severity)
+            
+            # Track root causes
+            if severity >= 7:  # Only track high-severity root causes
+                root_causes.append({
+                    "category": category,
+                    "severity": severity,
+                    "cause": root_cause
+                })
+            
+            # Track primary trigger
+            if severity > highest_severity:
+                highest_severity = severity
+                primary_trigger_category = category
+                primary_root_cause = root_cause
                 
         elif sentiment == "positive":
             positives += 1
@@ -323,16 +331,28 @@ def calculate_entity_score(mentions):
 
         raw_score += mention_score(
             sentiment=sentiment,
-            severity=mention.get("severity", 5),
+            severity=severity,
             confidence=mention.get("confidence", 0.8),
             source=mention.get("source", "other"),
-            category=mention.get("category", "general"),
-            risk=mention.get("risk_level", "low"),
+            category=category,
+            risk=risk_level,
             created_at=mention.get("created_at")
         )
 
     raw_score *= volume_multiplier(negatives)
     final_score = normalize(raw_score)
+
+    # Build root cause summary
+    if negatives == 0:
+        root_cause_summary = "No negative mentions detected. Brand reputation is healthy."
+    elif root_causes:
+        # Sort root causes by severity (highest first)
+        root_causes.sort(key=lambda x: x["severity"], reverse=True)
+        top_causes = root_causes[:3]
+        cause_strs = [f"{c['category'].replace('_', ' ').title()}: {c['cause']}" for c in top_causes]
+        root_cause_summary = f"Top drivers: " + "; ".join(cause_strs)
+    else:
+        root_cause_summary = f"Primary trigger: {primary_trigger_category.replace('_', ' ').title()} — {primary_root_cause}"
 
     return {
         "score": final_score,
@@ -340,5 +360,8 @@ def calculate_entity_score(mentions):
         "negative_mentions": negatives,
         "positive_mentions": positives,
         "neutral_mentions": neutrals,
-        "primary_trigger_category": primary_trigger_category
+        "primary_trigger_category": primary_trigger_category,
+        "category_breakdown": category_breakdown,
+        "root_cause_summary": root_cause_summary,
+        "top_root_causes": root_causes[:3]
     }

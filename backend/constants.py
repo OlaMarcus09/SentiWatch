@@ -9,10 +9,6 @@ entire scoring engine.
 
 # ----------------------------------------------------
 # Source credibility weights
-# FIX: Added "nigerian_news" key to match the normalised
-# source string from _normalise_source() in risk_engine.py.
-# Previously, Google News RSS mentions fell through to
-# "other" (weight 1.0) because no key matched.
 # ----------------------------------------------------
 
 SOURCE_WEIGHTS = {
@@ -25,7 +21,6 @@ SOURCE_WEIGHTS = {
     "punch": 3.5,
     "premium_times": 3.5,
 
-    # Google News RSS aggregating Nigerian outlets
     "nigerian_news": 2.5,
 
     "nairaland": 1.2,
@@ -56,6 +51,8 @@ CATEGORY_WEIGHTS = {
     "customer_service": 1.2,
     "leadership": 1.5,
     "financial": 1.7,
+    "customer_complaint": 1.4,
+    "customer_praise": 0.5,
     "general": 1.0,
 }
 
@@ -129,6 +126,8 @@ VALID_CATEGORIES = {
     "legal",
     "regulatory",
     "customer_service",
+    "customer_complaint",
+    "customer_praise",
     "product_quality",
     "operations",
     "cyber",
@@ -149,4 +148,78 @@ VALID_RISKS = {
     "medium",
     "high",
     "critical",
+}
+
+
+# ----------------------------------------------------
+# Category colors for dashboard heatmap
+# ----------------------------------------------------
+
+CATEGORY_COLORS = {
+    "fraud": "#EF4444",
+    "regulatory": "#F59E0B",
+    "customer_complaint": "#F97316",
+    "customer_praise": "#10B981",
+    "product_quality": "#8B5CF6",
+    "operations": "#3B82F6",
+    "cyber": "#EC4899",
+    "security": "#EF4444",
+    "financial": "#F59E0B",
+    "leadership": "#6366F1",
+    "legal": "#8B5CF6",
+    "general": "#6B7280",
+}
+
+
+# ----------------------------------------------------
+# Industry mapping for personalized recommendations
+# ----------------------------------------------------
+
+INDUSTRY_MAPPING = {
+    # Fintech
+    "cowrywise": "fintech",
+    "opay": "fintech",
+    "piggyvest": "fintech",
+    "flutterwave": "fintech",
+    "paystack": "fintech",
+    "moniepoint": "fintech",
+    "gtbank": "fintech",
+    "access bank": "fintech",
+    "first bank": "fintech",
+    "kuda": "fintech",
+    "gtco": "fintech",
+    "sterling": "fintech",
+    "wema": "fintech",
+    "fairmoney": "fintech",
+    "carbon": "fintech",
+    "mint": "fintech",
+    "chipper": "fintech",
+    "yellowcard": "fintech",
+    "busha": "fintech",
+    # Education
+    "miva": "education",
+    "ekiti state university": "education",
+    "university of lagos": "education",
+    "unilag": "education",
+    "covenant university": "education",
+    "bowen university": "education",
+    # Hospitality
+    "transcorp": "hospitality",
+    "ecko hotel": "hospitality",
+    "radisson": "hospitality",
+    "sheraton": "hospitality",
+    "four points": "hospitality",
+    # E-commerce
+    "jiji": "ecommerce",
+    "konga": "ecommerce",
+    "jumia": "ecommerce",
+    "aliexpress": "ecommerce",
+    "amazon": "ecommerce",
+    # Transportation
+    "gokada": "transportation",
+    "bolt": "transportation",
+    "uber": "transportation",
+    "lagbus": "transportation",
+    "max.ng": "transportation",
+    "treepz": "transportation",
 }

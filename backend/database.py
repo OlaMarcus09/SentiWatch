@@ -2,7 +2,6 @@ import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# Load environment variables from the .env file
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -19,5 +18,4 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 if SUPABASE_SERVICE_ROLE:
     supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
 else:
-    # Fallback just in case
     supabase_admin = supabase

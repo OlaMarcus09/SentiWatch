@@ -7,7 +7,7 @@ from typing import Dict, Any
 from groq import Groq
 from dotenv import load_dotenv
 
-from database import supabase
+from database import supabase, supabase_admin
 from constants import VALID_CATEGORIES, VALID_RISKS, VALID_SENTIMENTS
 
 load_dotenv()
@@ -24,32 +24,60 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
+# 🔥 NEW: Smarter SYSTEM_PROMPT with root cause detection
 SYSTEM_PROMPT = """
-You are SentiWatch AI, an expert Brand Reputation Intelligence Analyst.
-Task: Analyze if the text damages or enhances brand trust.
+You are SentiWatch AI, an expert Brand Reputation Intelligence Analyst for the Nigerian market.
+Task: Analyze if the text damages or enhances brand trust. Identify the root cause.
+
 Output: Return ONLY valid JSON. No markdown formatting.
 
 Schema:
 {
-    "sentiment":"positive|neutral|negative",
-    "severity":1-10,
-    "confidence":0.0-1.0,
-    "category":"fraud|legal|regulatory|customer_service|product_quality|operations|cyber|security|financial|leadership|general",
-    "risk":"low|medium|high|critical",
-    "reason":"Short sentence explaining the decision."
+    "sentiment": "positive|neutral|negative",
+    "category": "fraud|regulatory|customer_praise|customer_complaint|product_quality|operations|cyber|security|financial|leadership|general",
+    "sub_category": "fund_lockup|delivery_delay|security_breach|service_speed|pricing|competitor_mention|award|partnership|reputation_attack|general",
+    "severity": 1-10,
+    "confidence": 0.0-1.0,
+    "risk": "low|medium|high|critical",
+    "root_cause": "Brief 5-10 word explanation of what triggered this mention",
+    "reason": "Short sentence explaining the decision."
 }
 
 Examples:
-1. Headline: "EFCC Arraigns CEO Over Fraud" -> {"sentiment":"negative", "severity":10, "confidence":0.99, "category":"fraud", "risk":"critical", "reason":"Fraud investigation is a severe reputational threat."}
-2. Headline: "Company Wins Industry Innovation Award" -> {"sentiment":"positive", "severity":7, "confidence":0.98, "category":"general", "risk":"low", "reason":"Innovation awards enhance brand perception."}
-3. Headline: "Company announces office holiday hours" -> {"sentiment":"neutral", "severity":1, "confidence":0.95, "category":"general", "risk":"low", "reason":"Routine operational update."}
+
+1. "Thanks to Cowrywise for saving me from a losing streak in trading!"
+   → {"sentiment":"positive","category":"customer_praise","sub_category":"general","severity":6,"confidence":0.95,"risk":"low","root_cause":"Customer praises platform for saving from losses","reason":"Customer appreciation with no complaints"}
+
+2. "My funds were locked on Cowrywise for 3 days with no explanation!"
+   → {"sentiment":"negative","category":"customer_complaint","sub_category":"fund_lockup","severity":8,"confidence":0.98,"risk":"high","root_cause":"Funds locked without explanation causing customer distress","reason":"Operational issue causing customer frustration"}
+
+3. "EFCC Arraigns CEO Over N36m Fraud"
+   → {"sentiment":"negative","category":"fraud","sub_category":"legal_charge","severity":10,"confidence":0.99,"risk":"critical","root_cause":"CEO arraigned on fraud charges by EFCC","reason":"Fraud investigation is a severe reputational threat"}
+
+4. "Company announces office holiday hours"
+   → {"sentiment":"neutral","category":"general","sub_category":"operational_update","severity":1,"confidence":0.95,"risk":"low","root_cause":"Routine operational update","reason":"Routine operational announcement"}
+
+5. "Huge queues at this branch in Lekki. Very disappointing service speed."
+   → {"sentiment":"negative","category":"customer_complaint","sub_category":"service_speed","severity":7,"confidence":0.92,"risk":"medium","root_cause":"Slow service causing customer dissatisfaction","reason":"Customer complaint about service speed"}
 
 Rules:
-- If text involves crime, fraud, police, court, or scandals, classify as NEGATIVE regardless of tone.
-- If the content is purely operational (office hours, holidays), classify as NEUTRAL.
-- If uncertain between negative and neutral, bias towards NEGATIVE.
-- If output is invalid JSON, the system fails. Be precise.
+- If text contains fraud, EFCC, police, court, or scandals → category=fraud or regulatory, risk=critical/high
+- If text is a customer compliment → category=customer_praise, risk=low
+- If text is a customer complaint → category=customer_complaint or product_quality
+- If text is about regulations, CBN, NAFDAC → category=regulatory
+- If uncertain between negative and neutral, bias towards NEGATIVE
+- Keep root_cause under 10 words
+- Be precise. Return ONLY JSON.
 """
+
+# Valid sub-categories (for validation)
+VALID_SUB_CATEGORIES = {
+    "fund_lockup", "delivery_delay", "security_breach", "service_speed",
+    "pricing", "competitor_mention", "award", "partnership", 
+    "reputation_attack", "legal_charge", "operational_update",
+    "general", "data_breach", "fraud_allegation", "regulatory_fine",
+    "customer_feedback", "product_defect", "staff_conduct"
+}
 
 
 def validate_ai_output(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -57,10 +85,12 @@ def validate_ai_output(result: Dict[str, Any]) -> Dict[str, Any]:
     raw_sentiment = str(result.get("sentiment", "neutral")).lower().strip()
     raw_risk = str(result.get("risk", "low")).lower().strip()
     raw_category = str(result.get("category", "general")).lower().strip()
+    raw_sub_category = str(result.get("sub_category", "general")).lower().strip()
 
     result["sentiment"] = raw_sentiment if raw_sentiment in VALID_SENTIMENTS else "neutral"
     result["risk"] = raw_risk if raw_risk in VALID_RISKS else "low"
     result["category"] = raw_category if raw_category in VALID_CATEGORIES else "general"
+    result["sub_category"] = raw_sub_category if raw_sub_category in VALID_SUB_CATEGORIES else "general"
 
     try:
         severity = int(result.get("severity", 5))
@@ -74,7 +104,9 @@ def validate_ai_output(result: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         result["confidence"] = 0.75
 
+    result["root_cause"] = str(result.get("root_cause", "No root cause identified")).strip()[:100]
     result["reason"] = str(result.get("reason", "No reason provided")).strip()
+    
     return result
 
 
@@ -104,14 +136,13 @@ def call_groq(text: str) -> Dict[str, Any]:
 
 def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
     """
-    FIX 1: Now filters by entity_id and uses .not_.in_() to exclude
-    already-processed mentions at the database level, so Groq only
-    ever sees fresh, unanalysed content.
+    Filters by entity_id and excludes already-processed mentions.
+    Uses supabase_admin to bypass RLS for backend reads.
     """
 
     # 1. Fetch IDs of mentions that already have a sentiment score
     processed_res = (
-        supabase
+        supabase_admin
         .table("sentiment_results")
         .select("mention_id")
         .execute()
@@ -119,7 +150,7 @@ def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
     processed_ids = [row["mention_id"] for row in processed_res.data]
 
     # 2. Build the base query — filter by entity_id if provided
-    query = supabase.table("mentions").select("*")
+    query = supabase_admin.table("mentions").select("*")
 
     if entity_id:
         query = query.eq("entity_id", entity_id)
@@ -136,8 +167,7 @@ def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
 
 def is_relevant(text: str, brand_name: str) -> bool:
     """
-    FIX 2: Gatekeeper that blocks junk mentions from ever
-    reaching Groq — saving tokens and keeping scores clean.
+    Gatekeeper that blocks junk mentions from ever reaching Groq.
     Returns True only if the mention is worth analysing.
     """
 
@@ -159,10 +189,12 @@ def save_sentiment(mention_id: str, result: Dict[str, Any]):
         "confidence": result["confidence"],
         "severity": result["severity"],
         "category": result["category"],
+        "sub_category": result.get("sub_category", "general"),
         "risk_level": result["risk"],
+        "root_cause": result.get("root_cause", "No root cause identified"),
         "reason": result["reason"]
     }
-    supabase.table("sentiment_results").insert(payload).execute()
+    supabase_admin.table("sentiment_results").insert(payload).execute()
 
 
 def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None):
@@ -175,7 +207,6 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None):
         logging.error("Missing GROQ_API_KEY")
         return {"processed": 0, "failed": 0}
 
-    # FIX 1: Pass entity_id so only the right mentions are fetched
     mentions = get_unprocessed_mentions(entity_id=entity_id, limit=20)
 
     if not mentions:
@@ -189,7 +220,6 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None):
         mention_id = mention["id"]
         text = mention.get("content", "")
 
-        # FIX 2: Gatekeeper — skip junk before hitting Groq
         if not is_relevant(text, brand_name):
             logging.info(f"Skipped irrelevant mention {mention_id}")
             failed += 1
@@ -202,8 +232,10 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None):
             logging.info(
                 f"Mention {mention_id} → "
                 f"sentiment={ai_result['sentiment']} | "
+                f"category={ai_result['category']} | "
                 f"risk={ai_result['risk']} | "
-                f"severity={ai_result['severity']}"
+                f"severity={ai_result['severity']} | "
+                f"root_cause={ai_result.get('root_cause', 'N/A')}"
             )
             processed += 1
 
