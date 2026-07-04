@@ -7,25 +7,25 @@ import { supabase } from '@/lib/supabase';
 import { AlertCircle, Loader2, Menu, X } from 'lucide-react';
 
 // ─── Existing Components ──────────────────────
-import EntitySelector from './components/EntitySelector';
-import SentimentChart from './components/SentimentChart';
-import AddBrandForm from './components/AddBrandForm';
+import EntitySelector from '../components/EntitySelector';
+import SentimentChart from '../components/SentimentChart';
+import AddBrandForm from '../components/AddBrandForm';
 
 // ─── Layout Components ────────────────────────
-import Sidebar from './components/layout/Sidebar';
-import TopNavbar from './components/layout/TopNavbar';
+import Sidebar from '../components/layout/Sidebar';
+import TopNavbar from '../components/layout/TopNavbar';
 
 // ─── Dashboard Components ─────────────────────
-import HeroSection from './components/dashboard/HeroSection';
-import KPICards from './components/dashboard/KPICards';
-import RiskGauge from './components/dashboard/RiskGauge';
-import AIInsights from './components/dashboard/AIInsights';
-import RecommendationCenter from './components/dashboard/RecommendationCenter';
-import MentionFeed from './components/dashboard/MentionFeed';
-import AlertCenter from './components/dashboard/AlertCenter';
+import HeroSection from '../components/dashboard/HeroSection';
+import KPICards from '../components/dashboard/KPICards';
+import RiskGauge from '../components/dashboard/RiskGauge';
+import AIInsights from '../components/dashboard/AIInsights';
+import RecommendationCenter from '../components/dashboard/RecommendationCenter';
+import MentionFeed from '../components/dashboard/MentionFeed';
+import AlertCenter from '../components/dashboard/AlertCenter';
 
 // ─── UI Components ────────────────────────────
-import Card from './components/ui/Card';
+import Card from '../components/ui/Card';
 
 // ──────────────────────────────────────────────
 // Main Page
@@ -84,7 +84,7 @@ function Dashboard() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // ─── Data fetching (EXACTLY the same as before) ──
+  // ─── Data fetching ──────────────────────────
   useEffect(() => {
     let attempts = 0;
     const MAX_ATTEMPTS = 8;
