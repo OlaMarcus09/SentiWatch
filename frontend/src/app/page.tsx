@@ -88,7 +88,7 @@ function Dashboard() {
   useEffect(() => {
     let isMounted = true;
     let pollInterval: NodeJS.Timeout;
-    const MAX_POLLS = 15; // 15 attempts * 3 seconds = 45 seconds timeout
+    const MAX_POLLS = 40; // 40 attempts * 3 seconds = 120s (covers Render free-tier cold starts)
     let pollCount = 0;
 
     const loadingMessages = [

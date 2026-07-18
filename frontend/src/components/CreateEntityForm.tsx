@@ -39,6 +39,15 @@ export default function CreateEntityForm({ userToken }: { userToken: string }) {
     setError(null);
 
     try {
+      // Wake the backend first. On Render's free tier the service sleeps after
+      // ~15min idle and takes ~30s to cold-start; pinging root before the POST
+      // means the pipeline runs on a warm server instead of racing the wake-up.
+      try {
+        await fetch(`${process.env.NEXT_PUBLIC_API_URL}/`, { method: 'GET' });
+      } catch {
+        // Non-fatal: if the warm-up ping fails we still attempt the create below.
+      }
+
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/entities`, {
         method: 'POST',
         headers: {

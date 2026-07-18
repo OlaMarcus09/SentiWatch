@@ -175,9 +175,14 @@ def is_relevant(text: str, brand_name: str) -> bool:
     if len(text.strip()) < 15:
         return False
 
-    # Must actually mention the brand (case-insensitive)
-    if brand_name and brand_name.lower() not in text.lower():
-        return False
+    # Must actually mention the brand (case-insensitive).
+    # Normalize spacing on both sides so an entity named "AprokoDoctor"
+    # matches text that writes it as "Aproko Doctor" (or vice versa).
+    if brand_name:
+        brand_norm = brand_name.lower().replace(" ", "")
+        text_norm = text.lower().replace(" ", "")
+        if brand_norm not in text_norm:
+            return False
 
     return True
 
