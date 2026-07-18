@@ -1,0 +1,45 @@
+name: Hourly Reputation Pipeline
+
+# Runs cron_sync.py on a schedule instead of a paid always-on worker.
+# It wakes the (free-tier) backend, then triggers scrape -> analyze -> risk
+# for every monitored entity via the authenticated internal endpoints.
+
+on:
+  schedule:
+    # Top of every hour (UTC). GitHub cron is always UTC.
+    - cron: "0 * * * *"
+  workflow_dispatch: {}   # allows manual runs from the Actions tab
+
+# Prevent overlapping runs if one cycle runs long.
+concurrency:
+  group: reputation-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pipeline
+        working-directory: backend
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+        run: python cron_sync.py

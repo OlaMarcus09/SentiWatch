@@ -35,6 +35,7 @@ StrEnum==0.4.15
 supabase==2.31.0
 supabase-auth==2.31.0
 supabase-functions==2.31.0
+tavily-python==0.7.26
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.7.0

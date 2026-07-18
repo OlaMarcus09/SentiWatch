@@ -1,76 +1,30 @@
 import os
-
 import resend
-
 from dotenv import load_dotenv
-
 from database import supabase, supabase_admin
-
 from scoring import calculate_entity_score
-
 from constants import EMAIL_ALERT_THRESHOLD
 
 load_dotenv()
-
 resend.api_key = os.getenv("RESEND_API_KEY")
 
 
 # ──────────────────────────────────────────────────────
-# Industry mapping for personalized recommendations
-# ──────────────────────────────────────────────────────
-INDUSTRY_MAPPING = {
-    "cowrywise": "fintech",
-    "opay": "fintech",
-    "piggyvest": "fintech",
-    "flutterwave": "fintech",
-    "paystack": "fintech",
-    "moniepoint": "fintech",
-    "gtbank": "fintech",
-    "access bank": "fintech",
-    "first bank": "fintech",
-    "kuda": "fintech",
-    "miva": "education",
-    "ekiti state university": "education",
-    "university of lagos": "education",
-    "transcorp": "hospitality",
-    "ecko hotel": "hospitality",
-    "jiji": "ecommerce",
-    "konga": "ecommerce",
-    "jumia": "ecommerce",
-    "gokada": "transportation",
-    "bolt": "transportation",
-    "uber": "transportation",
-}
-
-
-def get_industry(brand_name: str) -> str:
-    """Map a brand name to its industry."""
-    if not brand_name:
-        return "general"
-    brand_lower = brand_name.lower().strip()
-    for key, industry in INDUSTRY_MAPPING.items():
-        if key in brand_lower:
-            return industry
-    return "general"
-
-
-# ──────────────────────────────────────────────────────
-# Personalized Recommendation Generator
+# Personalized Recommendation Generator (Pivot Version)
 # ──────────────────────────────────────────────────────
 def generate_personalized_recommendation(
     score: int,
     status: str,
     category_breakdown: dict,
     top_root_causes: list,
-    brand_name: str = "Your Brand",
-    industry: str = "general"
+    brand_name: str = "Your Profile",
+    profile_type: str = "business"
 ) -> str:
     """
-    Generates a personalized, actionable recommendation based on:
+    Generates a persona-specific, actionable recommendation based on:
     - Risk score band
     - Category breakdown (what's driving the risk)
-    - Root causes (specific triggers)
-    - Brand industry (fintech, hospitality, etc.)
+    - Profile persona (student, influencer, real_estate, business)
     """
     
     # Determine the primary category driver
@@ -81,167 +35,101 @@ def generate_personalized_recommendation(
         primary_category = max(category_breakdown, key=category_breakdown.get)
         primary_count = category_breakdown.get(primary_category, 0)
     
-    # Category-specific advice by industry
-    category_advice = {
-        "fraud": {
-            "fintech": "🔴 **Immediate Trust Protection Protocol**\n\n"
-                f"**ROOT CAUSE:** {primary_count} fraud-related mentions detected. Customers are raising concerns about financial safety.\n\n"
-                f"**ACTION PLAN (Fintech-Specific):**\n"
-                f"1. **Immediate (2 hours):** Issue a formal statement on your verified social channels clarifying your fraud prevention measures.\n"
-                f"2. **Within 4 hours:** Notify CBN compliance team and prepare a regulatory update.\n"
-                f"3. **Within 24 hours:** Email all affected users with clear instructions on next steps.\n\n"
-                f"**REMEMBER:** Fintechs face heightened regulatory scrutiny. Be transparent but avoid admitting liability without legal review.",
+    # Persona-specific playbooks tailored for the Nigerian ecosystem & global exit/growth constraints
+    persona_advice = {
+        "student": {
+            "fraud": "🔴 **Visa & Admission Blacklist Warning**\n\n"
+                f"**ALERT TRIGGER:** {primary_count} mentions relating to academic dishonesty, payment discrepancies, or fraudulent listings flagged.\n\n"
+                f"**IMMEDIATE CRISIS PROTOCOL:**\n"
+                f"1. **Within 2 hours:** Identify the source thread (Nairaland, X, or public forums) linking your name to this claim.\n"
+                f"2. **Within 12 hours:** If this is an identity mix-up, issue a clear pinned disclaimer separating your passport identity/legal name from the accused party.\n"
+                f"3. **Visa Precaution:** Embassies heavily screen background data. Prepare certified bank statements and clear institutional transcripts to override digital anomalies during your interview.",
             
-            "hospitality": "🔴 **Crisis Activation Mandate**\n\n"
-                f"**ROOT CAUSE:** {primary_count} fraud-related mentions detected affecting guest trust.\n\n"
-                f"**ACTION PLAN (Hospitality-Specific):**\n"
-                f"1. **Immediate (2 hours):** Issue a statement clarifying your payment security measures.\n"
-                f"2. **Within 24 hours:** Train front-desk staff on handling fraud concerns.\n"
-                f"3. **Short-term (7 days):** Review your booking security protocols.",
-            
-            "general": "🔴 **CRISIS ACTIVATION: Fraud Allegation Detected**\n\n"
-                f"**ROOT CAUSE:** {primary_count} fraud-related mentions detected.\n\n"
+            "customer_complaint": "🟠 **Digital Footprint Vetting Flag**\n\n"
+                f"**ALERT TRIGGER:** {primary_count} flags matching aggressive arguments, cyberbullying, or toxic online engagement.\n\n"
                 f"**ACTION PLAN:**\n"
-                f"1. **Immediate (2 hours):** Draft a corporate clarification.\n"
-                f"2. **Within 12 hours:** Consult legal counsel.\n"
-                f"3. **Within 24 hours:** Issue public statement."
+                f"1. **Immediate (4 hours):** De-escalate active public disputes. Delete or archive high-volatility threads or comment histories.\n"
+                f"2. **Within 24 hours:** Clean up open social media profiles. Ensure posts containing explicit language or highly sensitive content are set to private.\n"
+                f"3. **Architect's Advice:** Visa officers look for flags regarding social instability. Your digital presence must present you as an upstanding student traveler.",
+            
+            "general": "🟡 **Student Profile Optimization Required**\n\n"
+                f"Elevated digital chatter detected. Scan your history for political volatility or unverified professional claims that could cause a background verification delay during immigration checks."
         },
-        "customer_complaint": {
-            "fintech": "🟠 **Operational Friction Triage**\n\n"
-                f"**ROOT CAUSE:** {primary_count} customer complaints detected. Customers are frustrated with service issues.\n\n"
-                f"**ACTION PLAN (Fintech-Specific):**\n"
-                f"1. **Within 4 hours:** Identify the root cause from the complaints (fund lock-up, login issues, etc.).\n"
-                f"2. **Within 8 hours:** Deploy a customer support team to personally respond to each complaint.\n"
-                f"3. **Within 24 hours:** Issue a public acknowledgment and expected resolution timeline.\n\n"
-                f"**⚠️ CBN Compliance Reminder:** Fintechs must respond to customer complaints within 4 hours by CBN guidelines.",
-            
-            "hospitality": "🟠 **Guest Experience Triage**\n\n"
-                f"**ROOT CAUSE:** {primary_count} guest complaints detected about service quality.\n\n"
-                f"**ACTION PLAN (Hospitality-Specific):**\n"
-                f"1. **Within 4 hours:** Personally respond to each negative review.\n"
-                f"2. **Within 24 hours:** Offer compensation (discount, free meal, etc.) to affected guests.\n"
-                f"3. **Short-term (7 days):** Review service protocols based on complaint patterns.",
-            
-            "ecommerce": "🟠 **Customer Experience Triage**\n\n"
-                f"**ROOT CAUSE:** {primary_count} customer complaints detected.\n\n"
-                f"**ACTION PLAN (E-commerce-Specific):**\n"
-                f"1. **Within 4 hours:** Respond to each complaint with empathy and a solution.\n"
-                f"2. **Within 8 hours:** Identify if this is a recurring issue (delivery, quality, etc.).\n"
-                f"3. **Within 24 hours:** Update your FAQ or policy page to address concerns.",
-            
-            "general": "🟠 **Customer Complaint Management**\n\n"
-                f"**ROOT CAUSE:** {primary_count} customer complaints detected.\n\n"
+        
+        "influencer": {
+            "fraud": "🔴 **Brand-Safety Emergency: Sponsor Trust Protection**\n\n"
+                f"**ALERT TRIGGER:** {primary_count} scam/fraud allegations targeting your endorsements, giveaways, or business deals.\n\n"
                 f"**ACTION PLAN:**\n"
-                f"1. **Within 8 hours:** Respond to each complaint personally.\n"
-                f"2. **Within 24 hours:** Identify patterns and address root causes.\n"
-                f"3. **Short-term:** Review your customer service protocols."
+                f"1. **Immediate (1 hour):** Issue a crisp holding statement acknowledging the situation without accepting legal liability.\n"
+                f"2. **Within 6 hours:** Reach out privately to active corporate brand managers/sponsors to assure them an investigation is underway before they issue corporate pull-out statements.\n"
+                f"3. **Within 24 hours:** Publish clear proof, receipts, or legal disclaimers resolving the conflict.",
+            
+            "customer_complaint": "🟠 **PR De-escalation Protocol (Cancel Culture Defense)**\n\n"
+                f"**ALERT TRIGGER:** {primary_count} negative call-outs or call-to-actions trending.\n\n"
+                f"**ACTION PLAN:**\n"
+                f"1. **Within 2 hours:** Do not turn off comments completely—this amplifies the narrative. Restrict targeted harassment keywords using app filters instead.\n"
+                f"2. **Within 12 hours:** Record or draft an authentic, non-defensive clarification or apology if an error occurred.\n"
+                f"3. **Within 24 hours:** Pivot content temporarily to community value or silence to let the algorithm algorithmically cool down.",
+            
+            "general": "🟡 **Influencer Sentiment Shadow Shift**\n\n"
+                f"Unfavorable discussion spikes detected. Review your latest mentions to protect upcoming monetization and PR campaigns."
         },
-        "regulatory": {
-            "fintech": "🟠 **Regulatory Alignment Strategy**\n\n"
-                f"**ROOT CAUSE:** {primary_count} regulatory mentions detected involving CBN, EFCC, or NAFDAC.\n\n"
-                f"**ACTION PLAN (Fintech-Specific):**\n"
-                f"1. **Immediate (2 hours):** Brief your legal/compliance team.\n"
-                f"2. **Within 12 hours:** Prepare a factual statement verifying your regulatory standing.\n"
-                f"3. **Within 24 hours:** If CBN is mentioned, contact your relationship manager proactively.\n\n"
-                f"**⚠️ CRITICAL:** Never speculate on regulatory outcomes. Use only factual, verified information.",
-            
-            "general": "🟠 **Regulatory Compliance Review**\n\n"
-                f"**ROOT CAUSE:** {primary_count} regulatory mentions detected.\n\n"
+
+        "real_estate": {
+            "fraud": "🔴 **Real Estate Trust & Legal Risk Alert**\n\n"
+                f"**ALERT TRIGGER:** {primary_count} mentions flagging allocation delays, dual-allocation disputes, or 'Omo Onile' / land grabber issues.\n\n"
                 f"**ACTION PLAN:**\n"
-                f"1. **Within 4 hours:** Engage your legal/compliance team.\n"
-                f"2. **Within 12 hours:** Draft a factual holding statement.\n"
-                f"3. **Within 24 hours:** Proactively contact relevant regulators."
+                f"1. **Immediate (2 hours):** Review documentation matching the specific estate or project mentioned.\n"
+                f"2. **Within 12 hours:** Issue a project status update to all existing clients to preempt an investor panic or mass refund requests.\n"
+                f"3. **Within 24 hours:** Provide transparent timelines for land physical documentation verification.",
+            
+            "customer_complaint": "🟠 **Property Portfolio Reputation Management**\n\n"
+                f"**ALERT TRIGGER:** {primary_count} complaints regarding maintenance, structural quality, or structural delivery timelines.\n\n"
+                f"**ACTION PLAN:**\n"
+                f"1. **Within 4 hours:** Assign a dedicated customer relations representative to reply directly to public complaint posts.\n"
+                f"2. **Within 24 hours:** Take the conversation offline by extending an internal resolution ticket/direct messaging sequence.\n"
+                f"3. **Long-term:** Publish operational improvements or renovation highlights to push down historical search engine complaints."
         },
-        "product_quality": {
-            "fintech": "🟡 **Product Quality Assessment**\n\n"
-                f"**ROOT CAUSE:** {primary_count} product quality complaints detected.\n\n"
-                f"**ACTION PLAN (Fintech-Specific):**\n"
-                f"1. **Within 8 hours:** Identify the specific product issue from complaints.\n"
-                f"2. **Within 24 hours:** Deploy a fix or communicate the resolution timeline.\n"
-                f"3. **Short-term:** Review QA processes for the product.",
-            
-            "general": "🟡 **Product Quality Review**\n\n"
-                f"**ROOT CAUSE:** {primary_count} product quality complaints detected.\n\n"
+
+        "business": {
+            "fraud": "🔴 **Immediate Trust Protection Protocol**\n\n"
+                f"**ALERT TRIGGER:** {primary_count} fraud-related mentions detected. Customers are raising concerns about financial safety.\n\n"
                 f"**ACTION PLAN:**\n"
-                f"1. **Within 12 hours:** Investigate the root cause.\n"
-                f"2. **Within 24 hours:** Communicate the fix to affected customers.\n"
-                f"3. **Short-term:** Implement quality control improvements."
-        },
-        "customer_praise": {
-            "fintech": "🟢 **Maintaining Brand Equity**\n\n"
-                f"**ROOT CAUSE:** {primary_count} customer praise mentions detected.\n\n"
-                f"**ACTION PLAN (Fintech-Specific):**\n"
-                f"1. **Within 4 hours:** Respond to and amplify the positive feedback.\n"
-                f"2. **Within 24 hours:** Use testimonials in marketing materials.\n"
-                f"3. **Short-term:** Identify if praise is tied to a specific feature → promote it.",
+                f"1. **Immediate (2 hours):** Issue a formal statement on your verified channels detailing your active safety standards.\n"
+                f"2. **Within 4 hours:** Alert compliance teams and legal advisors to review system vulnerabilities.\n"
+                f"3. **Within 24 hours:** Email affected client segments providing transparent protection actions.",
             
-            "general": "🟢 **Brand Health — No Action Required**\n\n"
-                f"**ROOT CAUSE:** {primary_count} positive mentions detected.\n\n"
+            "customer_complaint": "🟠 **Operational Friction Triage**\n\n"
+                f"**ALERT TRIGGER:** {primary_count} customer service complaints logged.\n\n"
                 f"**ACTION PLAN:**\n"
-                f"1. **Within 4 hours:** Respond to and amplify positive feedback.\n"
-                f"2. **Short-term:** Use testimonials in marketing."
+                f"1. **Within 4 hours:** Identify the specific breaking bottleneck (downtime, payment gateways, shipping lag).\n"
+                f"2. **Within 8 hours:** Deploy support agents to reply empathetically to public threads.\n"
+                f"3. **Compliance Tip:** Ensure alignment with your target SLA protocols to prevent client attrition."
         }
     }
     
-    # Build the recommendation
+    # Build response matrix based on overall score thresholds
     if score <= 25:
         return (
-            f"🟢 **Brand Health: Healthy**\n\n"
-            f"**RISK SCORE:** {score}/100 — Brand sentiment is stable.\n\n"
-            f"**ROOT CAUSE SUMMARY:** No significant negative mentions detected.\n\n"
-            f"**RECOMMENDATION:** Continue monitoring. Maintain your current customer engagement strategy.\n\n"
-            f"**PRO TIP:** Use your positive mentions ({sum(1 for c in category_breakdown.values() if c > 0)} positive signals) for organic marketing."
+            f"🟢 **Profile Reputation Status: Excellent**\n\n"
+            f"**RISK INDEX:** {score}/100 — Stable digital presence.\n\n"
+            f"**RECOMMENDATION:** No protective intervention needed. Proceed with your standard online footprint strategy.\n\n"
+            f"**INSIGHT:** Your profile displays healthy, clear sentiment markers across tracking nodes."
         )
     
-    elif score <= 50:
-        # Watch status — get the primary driver
-        category_advice_text = category_advice.get(primary_category, {}).get(industry, category_advice.get(primary_category, {}).get("general", ""))
-        
-        if not category_advice_text:
-            # Fallback generic advice
-            return (
-                f"👀 **Watch: Elevated Chatter Detected**\n\n"
-                f"**RISK SCORE:** {score}/100 — Brand has elevated reputation chatter.\n\n"
-                f"**ROOT CAUSE SUMMARY:** {len(category_breakdown)} categories of mentions detected.\n\n"
-                f"**RECOMMENDATION:** Monitor closely and investigate root causes. Prepare a response plan.\n\n"
-                f"**NEXT STEPS:** Check the mentions feed above to identify specific trigger topics."
-            )
-        
-        return category_advice_text
+    # Retrieve personalized playbook block based on profile type and primary category driver
+    current_playbook = persona_advice.get(profile_type, persona_advice["business"])
+    advice_text = current_playbook.get(primary_category, current_playbook.get("general", ""))
     
-    elif score <= 75:
-        # Elevated — get the primary driver
-        category_advice_text = category_advice.get(primary_category, {}).get(industry, category_advice.get(primary_category, {}).get("general", ""))
+    if not advice_text:
+        return (
+            f"⚠️ **Elevated Risk: Active Monitoring Required**\n\n"
+            f"**RISK INDEX:** {score}/100 — Attention required for {profile_type} classification.\n\n"
+            f"**PRIMARY DRIVER:** {primary_category.replace('_', ' ').title()} ({primary_count} signals mapped).\n\n"
+            f"**ACTION REQUIRED:** Dive into the tracking feed to audit individual high-severity records."
+        )
         
-        if not category_advice_text:
-            return (
-                f"⚠️ **Elevated Risk: Active Management Required**\n\n"
-                f"**RISK SCORE:** {score}/100 — Brand reputation is at risk.\n\n"
-                f"**ROOT CAUSE SUMMARY:** {len(category_breakdown)} categories detected. Primary driver: {primary_category.replace('_', ' ').title()} ({primary_count} mentions).\n\n"
-                f"**RECOMMENDATION:** Convene your communications team and develop a response strategy.\n\n"
-                f"**NEXT STEPS:** Review the top negative mentions and prepare factual responses."
-            )
-        
-        return category_advice_text
-    
-    else:
-        # Critical
-        category_advice_text = category_advice.get(primary_category, {}).get(industry, category_advice.get(primary_category, {}).get("general", ""))
-        
-        if not category_advice_text:
-            return (
-                f"🚨 **CRITICAL: Immediate Crisis Activation Mandate**\n\n"
-                f"**RISK SCORE:** {score}/100 — BRAND IS IN CRISIS.\n\n"
-                f"**ROOT CAUSE SUMMARY:** {primary_category.replace('_', ' ').title()} is the primary driver ({primary_count} mentions).\n\n"
-                f"**RECOMMENDATION:**\n"
-                f"1. **IMMEDIATE (30 min):** Convene a crisis war-room.\n"
-                f"2. **Within 2 hours:** Retain a professional PR crisis management firm.\n"
-                f"3. **Within 4 hours:** Issue a public statement acknowledging the issue.\n"
-                f"4. **Ongoing:** Monitor SentiWatch every hour for sentiment changes.\n\n"
-                f"**⚠️ WARNING:** Silence will amplify the narrative. Act decisively."
-            )
-        
-        return category_advice_text
+    return advice_text
 
 
 # ──────────────────────────────────────────────────────
@@ -404,6 +292,7 @@ def send_email(entity: dict, score: dict) -> bool:
           <p>
             Status: <strong>{score['status'].upper()}</strong>
           </p>
+          <p>Profile Context: <strong>{entity.get('profile_type', 'business').upper()}</strong></p>
           {f'<p><strong>Root Cause:</strong> {score.get("root_cause_summary", "N/A")}</p>' if score.get("root_cause_summary") else ''}
           <table style="border-collapse:collapse;width:100%;">
             <tr>
@@ -442,24 +331,25 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
     if not entity:
         return {"error": "Entity not found"}
 
+    # Extract the database profile type directly
+    profile_type = entity.get("profile_type", "business")
+
     mentions = fetch_mentions(entity_id)
     metrics = calculate_entity_score(mentions)
     
     save_risk_score(entity_id, metrics)
 
     final_score = metrics["score"]
-    
-    # Generate personalized recommendation
     brand_name = entity["name"]
-    industry = get_industry(brand_name)
     
+    # Generate playbook text leveraging the new persona frameworks
     action_text = generate_personalized_recommendation(
         score=final_score,
         status=metrics["status"],
         category_breakdown=metrics.get("category_breakdown", {}),
         top_root_causes=metrics.get("top_root_causes", []),
         brand_name=brand_name,
-        industry=industry
+        profile_type=profile_type
     )
 
     supabase_admin.table("recommendations").insert({
@@ -475,6 +365,7 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
 
     return {
         "entity": entity["name"],
+        "profile_type": profile_type,
         "risk_score": final_score,
         "status": metrics["status"],
         "negative_mentions": metrics["negative_mentions"],

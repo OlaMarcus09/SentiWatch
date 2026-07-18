@@ -85,7 +85,7 @@ def confidence_weight(confidence):
 
         confidence = float(confidence)
 
-    except:
+    except (ValueError, TypeError):
 
         confidence = 0.75
 
@@ -106,7 +106,7 @@ def severity_weight(severity):
 
         severity = int(severity)
 
-    except:
+    except (ValueError, TypeError):
 
         severity = 5
 
@@ -138,7 +138,7 @@ def recency_weight(created_at):
         created = datetime.fromisoformat(
             created_at.replace("Z", "+00:00")
         )
-    except:
+    except (ValueError, TypeError, AttributeError):
         return 1
 
     now = datetime.now(timezone.utc)

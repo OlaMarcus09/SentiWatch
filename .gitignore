@@ -1,8 +1,11 @@
 # Backend Secrets & Environments
 backend/env/
-backend/__pycache__/
 backend/.env
 backend/.pytest_cache/
+
+# Python bytecode (all subdirs)
+__pycache__/
+*.pyc
 
 # Frontend Secrets & Environments
 frontend/node_modules/

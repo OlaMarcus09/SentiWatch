@@ -94,6 +94,11 @@ def fetch_google_reviews(entity_id: str, place_id: str) -> int:
     """
     try:
         if place_id == "mock_mode":
+            # Only inject synthetic review data when explicitly enabled (dev/demo).
+            # In production this stays off so real data is never polluted.
+            if os.getenv("ENABLE_MOCK_REVIEWS", "false").lower() != "true":
+                return 0
+
             # Fallback to a realistic data entry if no real place_id is passed yet
             link = "https://maps.google.com/?cid=mock"
             exists = supabase_admin.table("mentions").select("id").eq("url", link).execute()

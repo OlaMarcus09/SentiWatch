@@ -197,24 +197,55 @@ def save_sentiment(mention_id: str, result: Dict[str, Any]):
     supabase_admin.table("sentiment_results").insert(payload).execute()
 
 
-def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None):
+# Synchronous pipeline. All Groq/Supabase calls below are blocking, so this
+# stays a plain def. Async callers (e.g. run_analysis_pipeline) invoke it via
+# asyncio.to_thread to keep the event loop unblocked.
+def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, live_context: str = ""):
     """
-    Main pipeline. Accepts optional entity_id and brand_name
-    so the gatekeeper and entity filter work correctly.
+    Main pipeline. Accepts optional entity_id, brand_name, and live_context
+    so the gatekeeper, entity filter, and Tavily integrations work perfectly.
     """
-
     if not GROQ_API_KEY:
         logging.error("Missing GROQ_API_KEY")
         return {"processed": 0, "failed": 0}
 
+    processed, failed = 0, 0
+
+    # 1. New Pivot Flow: If Tavily returned real-time web context, analyze it as a premium node
+    if live_context and live_context != "No recent web mentions found.":
+        logging.info(f"Analyzing live web search context from Tavily for {brand_name}...")
+        try:
+            # We create a structured pseudo-mention to capture the live search event
+            mention_res = supabase_admin.table("mentions").insert({
+                "entity_id": entity_id,
+                "source": "tavily_live_search",
+                "content": f"Live Context Snapshot: {live_context[:400]}...",
+                "status": "processed"
+            }).execute()
+            
+            if mention_res.data:
+                live_mention_id = mention_res.data[0]["id"]
+                
+                # Pass the raw web data directly to Groq using your robust engine
+                ai_result = call_groq(live_context[:2000]) # Cap text to prevent token blowing
+                ai_result = validate_ai_output(ai_result)
+                
+                # Save it to sentiment_results using your built-in saver
+                save_sentiment(live_mention_id, ai_result)
+                processed += 1
+                logging.info(f"Live Tavily Context analyzed successfully. Risk score impact mapped.")
+        except Exception as e:
+            logging.error(f"Failed to process live context node: {e}")
+            failed += 1
+
+    # 2. Existing Scraped Data Flow: Fetch raw mentions from database tables
     mentions = get_unprocessed_mentions(entity_id=entity_id, limit=20)
 
     if not mentions:
-        logging.info("No new mentions to process.")
-        return {"processed": 0, "failed": 0}
+        logging.info("No new database-scraped mentions to process.")
+        return {"processed": processed, "failed": failed}
 
-    processed, failed = 0, 0
-    logging.info(f"Found {len(mentions)} new mentions to analyse.")
+    logging.info(f"Found {len(mentions)} new database mentions to analyse.")
 
     for mention in mentions:
         mention_id = mention["id"]

@@ -1,0 +1,36 @@
+# Render Blueprint for the SentiWatch FastAPI backend.
+# Free tier: no credit card required, never expires, commercial use allowed.
+# Note: free web services spin down after ~15 min idle and cold-start on the
+# next request. The GitHub Actions cron warms the service before each run.
+#
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: sentiwatch-api
+    runtime: python
+    plan: free
+    region: oregon           # change if you prefer a closer region
+    rootDir: backend         # the FastAPI app lives in /backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      # Secrets: set the real values in the Render dashboard (Environment tab).
+      # sync:false means Render will NOT overwrite them from this file.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: INTERNAL_API_KEY
+        sync: false
+      # Leave unset (or "false") in production so no mock data is written.
+      - key: ENABLE_MOCK_REVIEWS
+        value: "false"
