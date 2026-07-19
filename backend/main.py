@@ -14,6 +14,9 @@ from scrapers import (
     scrape_nigerian_news,
     fetch_google_reviews,
     scrape_social_media,
+    scrape_youtube,
+    scrape_twitter,
+    scrape_facebook,
 )
 from sentiment import analyze_and_store_sentiment
 from risk_engine import calculate_risk_and_alert
@@ -121,9 +124,14 @@ async def run_analysis_pipeline(entity_id: str, brand_name: str, profile_type: s
     try:
         print(f"Starting pipeline for {brand_name} ({profile_type})...")
 
-        # Fire standard scrapers (blocking requests calls -> offload to threads)
+        # Fire standard scrapers (blocking requests calls -> offload to threads).
+        # YouTube/Twitter/Facebook are env-gated no-ops until their keys are set,
+        # so this is safe to run today.
         await asyncio.to_thread(scrape_nigerian_news, entity_id, brand_name)
         await asyncio.to_thread(scrape_social_media, entity_id, brand_name)
+        await asyncio.to_thread(scrape_youtube, entity_id, brand_name)
+        await asyncio.to_thread(scrape_twitter, entity_id, brand_name)
+        await asyncio.to_thread(scrape_facebook, entity_id, brand_name)
 
         # Fetch live web context using Tavily (natively async)
         live_context = await fetch_entity_context(brand_name, profile_type)
@@ -153,6 +161,9 @@ def sync_all_sources(entity_id: str, brand_name: str, place_id: str = "mock_mode
     news_count = scrape_nigerian_news(entity_id, brand_name)
     google_count = fetch_google_reviews(entity_id, place_id)
     social_count = scrape_social_media(entity_id, brand_name)
+    youtube_count = scrape_youtube(entity_id, brand_name)
+    twitter_count = scrape_twitter(entity_id, brand_name)
+    facebook_count = scrape_facebook(entity_id, brand_name)
 
     return {
         "status": "Sync Complete",
@@ -160,6 +171,9 @@ def sync_all_sources(entity_id: str, brand_name: str, place_id: str = "mock_mode
             "news_mentions": news_count,
             "google_reviews": google_count,
             "social_media_mentions": social_count,
+            "youtube_mentions": youtube_count,
+            "twitter_mentions": twitter_count,
+            "facebook_mentions": facebook_count,
         },
     }
 

@@ -1,12 +1,101 @@
 import os
+import json
+import logging
 import resend
 from dotenv import load_dotenv
 from database import supabase, supabase_admin
 from scoring import calculate_entity_score
 from constants import EMAIL_ALERT_THRESHOLD
+from services import llm_client
 
 load_dotenv()
 resend.api_key = os.getenv("RESEND_API_KEY")
+
+
+RECOMMENDATION_SYSTEM_PROMPT = """
+You are SentiWatch's crisis-response strategist for the Nigerian market.
+Given an entity's current reputation metrics, produce 3 to 5 DISCRETE,
+prioritized recommendations — one per major risk driver — that the owner can
+act on immediately.
+
+Tailor tone and tactics to the entity type (business, influencer, student,
+real_estate). Be concrete and specific to the drivers given; avoid generic
+advice.
+
+Return ONLY valid JSON (no markdown) in exactly this shape:
+{
+  "recommendations": [
+    {
+      "title": "short imperative headline",
+      "action_plan": "2-4 concrete steps the owner should take",
+      "priority": "critical" | "high" | "medium" | "low",
+      "category": "the risk category this addresses",
+      "effort": "low" | "medium" | "high",
+      "eta": "e.g. 'Within 2 hours', 'Within 24 hours', 'This week'"
+    }
+  ]
+}
+Order the array from highest to lowest priority.
+"""
+
+VALID_PRIORITIES = {"critical", "high", "medium", "low"}
+
+
+def generate_ai_recommendations(
+    score: int,
+    status: str,
+    category_breakdown: dict,
+    top_root_causes: list,
+    brand_name: str = "Your Profile",
+    profile_type: str = "business",
+    competitors: list = None,
+) -> list:
+    """
+    Produces a prioritized list of 3-5 discrete recommendations via the LLM.
+    Returns [] on any failure so the caller can fall back to the template
+    playbook — the pipeline must never break because the LLM is unavailable.
+    """
+    competitors = competitors or []
+    comp_line = f"\nKnown competitors: {', '.join(competitors)}" if competitors else ""
+    causes_line = "; ".join(str(c) for c in (top_root_causes or [])) or "None identified"
+
+    user = (
+        f"Entity: {brand_name}\n"
+        f"Entity type: {profile_type}{comp_line}\n"
+        f"Risk score: {score}/100 (status: {status})\n"
+        f"Category breakdown (mentions per category): {json.dumps(category_breakdown)}\n"
+        f"Top root causes: {causes_line}\n\n"
+        f"Generate the prioritized recommendations now."
+    )
+
+    try:
+        result = llm_client.chat_json(
+            system=RECOMMENDATION_SYSTEM_PROMPT,
+            user=user,
+            model=llm_client.RECOMMENDATION_MODEL,
+            temperature=0.2,
+        )
+        recs = result.get("recommendations", [])
+        cleaned = []
+        for r in recs:
+            if not isinstance(r, dict):
+                continue
+            priority = str(r.get("priority", "medium")).lower().strip()
+            if priority not in VALID_PRIORITIES:
+                priority = "medium"
+            cleaned.append({
+                "title": str(r.get("title", "Reputation action")).strip()[:120],
+                "action_plan": str(r.get("action_plan", "")).strip(),
+                "priority": priority,
+                "category": str(r.get("category", "general")).strip()[:50],
+                "effort": str(r.get("effort", "medium")).lower().strip()[:10],
+                "eta": str(r.get("eta", "")).strip()[:40],
+                "status": "active",
+            })
+        return cleaned[:5]
+    except Exception as e:
+        logging.warning("AI recommendation generation failed, will fall back: %s", e)
+        return []
 
 
 # ──────────────────────────────────────────────────────
@@ -145,6 +234,33 @@ def get_entity(entity_id: str):
         .execute()
     )
     return result.data
+
+
+def _get_competitor_names(entity_id: str) -> list:
+    """
+    Returns the names of competitors linked to this entity. Best-effort:
+    returns [] on any failure so recommendation generation never breaks.
+    """
+    try:
+        links = (
+            supabase_admin.table("competitor_links")
+            .select("competitor_entity_id")
+            .eq("primary_entity_id", entity_id)
+            .execute()
+        )
+        comp_ids = [r["competitor_entity_id"] for r in (links.data or [])]
+        if not comp_ids:
+            return []
+        comps = (
+            supabase_admin.table("monitored_entities")
+            .select("name")
+            .in_("id", comp_ids)
+            .execute()
+        )
+        return [c["name"] for c in (comps.data or []) if c.get("name")]
+    except Exception as e:
+        logging.warning("Could not load competitor names: %s", e)
+        return []
 
 
 # ──────────────────────────────────────────────────────
@@ -345,21 +461,40 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
     final_score = metrics["score"]
     brand_name = entity["name"]
     
-    # Generate playbook text leveraging the new persona frameworks
-    action_text = generate_personalized_recommendation(
+    # Load competitor names to sharpen the AI recommendations.
+    competitors = _get_competitor_names(entity_id)
+
+    # Primary path: AI-generated, prioritized, discrete recommendations.
+    ai_recs = generate_ai_recommendations(
         score=final_score,
         status=metrics["status"],
         category_breakdown=metrics.get("category_breakdown", {}),
         top_root_causes=metrics.get("top_root_causes", []),
         brand_name=brand_name,
-        profile_type=profile_type
+        profile_type=profile_type,
+        competitors=competitors,
     )
+
+    if ai_recs:
+        # Store the array as JSON in the existing action_plan column — no schema
+        # migration needed. The frontend parses this into a ranked list.
+        action_payload = json.dumps({"recommendations": ai_recs})
+    else:
+        # Safety net: the legacy template playbook as a single plain string.
+        action_payload = generate_personalized_recommendation(
+            score=final_score,
+            status=metrics["status"],
+            category_breakdown=metrics.get("category_breakdown", {}),
+            top_root_causes=metrics.get("top_root_causes", []),
+            brand_name=brand_name,
+            profile_type=profile_type,
+        )
 
     supabase_admin.table("recommendations").insert({
         "entity_id": entity_id,
         "risk_score": final_score,
         "trigger_category": metrics.get("primary_trigger_category", "general"),
-        "action_plan": action_text,
+        "action_plan": action_payload,
         "category_breakdown": metrics.get("category_breakdown", {}),
         "root_cause_summary": metrics.get("root_cause_summary", "")
     }).execute()

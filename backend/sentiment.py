@@ -1,14 +1,12 @@
 import os
-import json
 import logging
-import time
 from typing import Dict, Any
 
-from groq import Groq
 from dotenv import load_dotenv
 
 from database import supabase, supabase_admin
 from constants import VALID_CATEGORIES, VALID_RISKS, VALID_SENTIMENTS
+from services import llm_client
 
 load_dotenv()
 
@@ -110,27 +108,16 @@ def validate_ai_output(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def call_groq(text: str) -> Dict[str, Any]:
-    client = Groq(api_key=GROQ_API_KEY)
-
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Analyze this mention: {text}"}
-                ],
-                temperature=0,
-                response_format={"type": "json_object"}
-            )
-            content = response.choices[0].message.content
-            return json.loads(content)
-
-        except Exception as e:
-            logging.warning(f"Groq attempt {attempt + 1} failed: {e}")
-            time.sleep(2)
-
-    raise Exception("Groq service failed after retries.")
+    """
+    Runs per-mention sentiment analysis through the configured LLM provider
+    (AgentRouter if set, else Groq). Name kept for backward-compat with callers.
+    """
+    return llm_client.chat_json(
+        system=SYSTEM_PROMPT,
+        user=f"Analyze this mention: {text}",
+        model=llm_client.SENTIMENT_MODEL,
+        temperature=0,
+    )
 
 
 def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
@@ -164,13 +151,75 @@ def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
     return mentions_res.data
 
 
-def is_relevant(text: str, brand_name: str) -> bool:
+RELEVANCE_SYSTEM_PROMPT = """
+You are a strict relevance classifier for a brand-reputation monitoring system.
+Decide whether a piece of text is genuinely ABOUT the given entity (a business,
+person, influencer, or property brand) — not merely containing the word.
+
+Reject text where the entity name appears only as a common English word, a
+place/street name, an unrelated person with the same name, a stock-ticker list,
+or an incidental mention that carries no reputational signal about the entity.
+Accept text that discusses the entity's products, service, conduct, news,
+customer experience, or public perception.
+
+Return ONLY valid JSON, no markdown:
+{"relevant": true|false, "confidence": 0.0-1.0, "reason": "short explanation"}
+"""
+
+
+def _llm_relevance_check(
+    text: str,
+    brand_name: str,
+    profile_type: str = "business",
+    competitors: list = None,
+) -> bool:
     """
-    Gatekeeper that blocks junk mentions from ever reaching Groq.
-    Returns True only if the mention is worth analysing.
+    LLM judge stage. Returns True if the model is confident the text is about
+    the entity. Fails OPEN (returns True) on any error so a gateway outage
+    never silently drops the whole batch.
+    """
+    competitors = competitors or []
+    comp_line = f"\nKnown competitors (do not confuse with the entity): {', '.join(competitors)}" if competitors else ""
+    user = (
+        f"Entity name: {brand_name}\n"
+        f"Entity type: {profile_type}{comp_line}\n\n"
+        f"Text to classify:\n\"\"\"\n{text[:1500]}\n\"\"\""
+    )
+    try:
+        result = llm_client.chat_json(
+            system=RELEVANCE_SYSTEM_PROMPT,
+            user=user,
+            model=llm_client.RELEVANCE_MODEL,
+            temperature=0,
+        )
+        relevant = bool(result.get("relevant", True))
+        confidence = float(result.get("confidence", 0.0))
+        if not relevant or confidence < 0.6:
+            logging.info(
+                "Relevance rejected (%.2f): %s",
+                confidence, str(result.get("reason", ""))[:120],
+            )
+            return False
+        return True
+    except Exception as e:
+        logging.warning("Relevance LLM check failed, failing open: %s", e)
+        return True
+
+
+def is_relevant(
+    text: str,
+    brand_name: str,
+    profile_type: str = "business",
+    competitors: list = None,
+) -> bool:
+    """
+    Two-stage gatekeeper that blocks junk mentions before full analysis.
+
+    Stage 1 (free): length + normalized brand-token presence.
+    Stage 2 (LLM): semantic judge — is the text actually ABOUT the entity?
     """
 
-    # Too short to be meaningful
+    # ── Stage 1: cheap prefilter ──
     if len(text.strip()) < 15:
         return False
 
@@ -183,7 +232,8 @@ def is_relevant(text: str, brand_name: str) -> bool:
         if brand_norm not in text_norm:
             return False
 
-    return True
+    # ── Stage 2: LLM semantic judge ──
+    return _llm_relevance_check(text, brand_name, profile_type, competitors)
 
 
 def save_sentiment(mention_id: str, result: Dict[str, Any]):
@@ -204,16 +254,61 @@ def save_sentiment(mention_id: str, result: Dict[str, Any]):
 # Synchronous pipeline. All Groq/Supabase calls below are blocking, so this
 # stays a plain def. Async callers (e.g. run_analysis_pipeline) invoke it via
 # asyncio.to_thread to keep the event loop unblocked.
+def _fetch_entity_context(entity_id: str) -> tuple:
+    """
+    Single read to get the entity's profile_type and linked competitor names,
+    used to sharpen the relevance judge. Returns (profile_type, [competitors]).
+    Best-effort: returns sensible defaults on any failure.
+    """
+    profile_type = "business"
+    competitors = []
+    if not entity_id:
+        return profile_type, competitors
+    try:
+        ent = (
+            supabase_admin.table("monitored_entities")
+            .select("profile_type")
+            .eq("id", entity_id)
+            .maybe_single()
+            .execute()
+        )
+        if ent and ent.data and ent.data.get("profile_type"):
+            profile_type = ent.data["profile_type"]
+
+        links = (
+            supabase_admin.table("competitor_links")
+            .select("competitor_entity_id")
+            .eq("primary_entity_id", entity_id)
+            .execute()
+        )
+        comp_ids = [r["competitor_entity_id"] for r in (links.data or [])]
+        if comp_ids:
+            comps = (
+                supabase_admin.table("monitored_entities")
+                .select("name")
+                .in_("id", comp_ids)
+                .execute()
+            )
+            competitors = [c["name"] for c in (comps.data or []) if c.get("name")]
+    except Exception as e:
+        logging.warning("Could not load entity context for relevance gate: %s", e)
+    return profile_type, competitors
+
+
 def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, live_context: str = ""):
     """
     Main pipeline. Accepts optional entity_id, brand_name, and live_context
     so the gatekeeper, entity filter, and Tavily integrations work perfectly.
     """
-    if not GROQ_API_KEY:
-        logging.error("Missing GROQ_API_KEY")
+    # Require at least one configured LLM provider (AgentRouter or Groq).
+    if not (llm_client._use_agentrouter() or GROQ_API_KEY):
+        logging.error("No LLM provider configured (set AGENTROUTER_* or GROQ_API_KEY)")
         return {"processed": 0, "failed": 0}
 
     processed, failed = 0, 0
+
+    # Load persona + competitors once to sharpen the relevance gate.
+    profile_type, competitors = _fetch_entity_context(entity_id)
 
     # 1. New Pivot Flow: If Tavily returned real-time web context, analyze it as a premium node
     if live_context and live_context != "No recent web mentions found.":
@@ -255,7 +350,7 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, l
         mention_id = mention["id"]
         text = mention.get("content", "")
 
-        if not is_relevant(text, brand_name):
+        if not is_relevant(text, brand_name, profile_type, competitors):
             logging.info(f"Skipped irrelevant mention {mention_id}")
             failed += 1
             continue
