@@ -37,32 +37,25 @@ SOURCE_WEIGHTS = {
 
 
 # ----------------------------------------------------
-# --- CATEGORY WEIGHTS (EDU) ---
+# Category weights
+# ----------------------------------------------------
 
 CATEGORY_WEIGHTS = {
-    "exams": 1.7,
-    "portal_issues": 1.8,
-    "lecturers": 1.5,
-    "fees": 1.8,
-    "hostels": 1.6,
-    "admissions": 1.6,
-    "scholarships": 1.7,
-    "campus_life": 1.4,
+    "fraud": 2.0,
+    "legal": 1.9,
+    "regulatory": 1.8,
+    "cyber": 1.8,
+    "security": 1.8,
+    "product_quality": 1.5,
+    "operations": 1.4,
+    "customer_service": 1.2,
+    "leadership": 1.5,
+    "financial": 1.7,
+    "customer_complaint": 1.4,
+    "customer_praise": 0.5,
     "general": 1.0,
 }
 
-# --- ALLOWED CATEGORIES (EDU) ---
-
-ALLOWED_CATEGORIES = [
-    "exams",
-    "portal_issues",
-    "lecturers",
-    "fees",
-    "hostels",
-    "admissions",
-    "scholarships",
-    "campus_life",
-]
 
 # ----------------------------------------------------
 # Risk multipliers
@@ -129,14 +122,18 @@ VOLUME_MULTIPLIERS = {
 # ----------------------------------------------------
 
 VALID_CATEGORIES = {
-    "exams",
-    "portal_issues",
-    "lecturers",
-    "fees",
-    "hostels",
-    "admissions",
-    "scholarships",
-    "campus_life",
+    "fraud",
+    "legal",
+    "regulatory",
+    "customer_service",
+    "customer_complaint",
+    "customer_praise",
+    "product_quality",
+    "operations",
+    "cyber",
+    "security",
+    "financial",
+    "leadership",
     "general",
 }
 
