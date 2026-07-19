@@ -1,6 +1,6 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { ReactNode } from 'react';
 
 interface ButtonProps {
@@ -11,17 +11,22 @@ interface ButtonProps {
   onClick?: () => void;
   disabled?: boolean;
   icon?: ReactNode;
+  type?: 'button' | 'submit' | 'reset';
+  'aria-label'?: string;
 }
 
-export default function Button({ 
-  children, 
-  variant = 'primary', 
-  size = 'md', 
-  className = '', 
+export default function Button({
+  children,
+  variant = 'primary',
+  size = 'md',
+  className = '',
   onClick,
   disabled = false,
-  icon
+  icon,
+  type = 'button',
+  'aria-label': ariaLabel,
 }: ButtonProps) {
+  const prefersReducedMotion = useReducedMotion();
   const variants = {
     primary: 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm hover:shadow-blue-100 dark:shadow-none',
     secondary: 'bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200',
@@ -37,14 +42,17 @@ export default function Button({
 
   return (
     <motion.button
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
+      type={type}
+      aria-label={ariaLabel}
+      whileHover={prefersReducedMotion || disabled ? undefined : { scale: 1.02 }}
+      whileTap={prefersReducedMotion || disabled ? undefined : { scale: 0.98 }}
       disabled={disabled}
       onClick={onClick}
       className={`
         inline-flex items-center gap-2
         font-medium rounded-xl
-        transition-all duration-200
+        transition-colors duration-200
+        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900
         ${variants[variant]}
         ${sizes[size]}
         ${disabled ? 'opacity-50 cursor-not-allowed' : ''}

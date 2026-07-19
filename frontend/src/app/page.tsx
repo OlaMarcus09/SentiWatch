@@ -27,8 +27,9 @@ import CompetitorComparisonMatrix from '../components/dashboard/CompetitorCompar
 export default function Page() {
   return (
     <Suspense fallback={
-      <div className="flex items-center justify-center h-screen bg-slate-50 dark:bg-slate-900">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+      <div role="status" aria-live="polite" className="flex items-center justify-center h-screen bg-slate-50 dark:bg-slate-900">
+        <Loader2 aria-hidden="true" className="w-8 h-8 animate-spin text-blue-500" />
+        <span className="sr-only">Loading…</span>
       </div>
     }>
       <Dashboard />
@@ -43,7 +44,7 @@ function Dashboard() {
 
   // Core State
   const [loading, setLoading] = useState(true);
-  const [loadingMessage, setLoadingMessage] = useState('Initializing secure connection...');
+  const [loadingMessage, setLoadingMessage] = useState('Initializing secure connection…');
   const [error, setError] = useState<string | null>(null);
   const [userToken, setUserToken] = useState<string>('');
 
@@ -98,13 +99,13 @@ function Dashboard() {
     let pollCount = 0;
 
     const loadingMessages = [
-      'Authenticating user...',
-      'Deploying data scrapers...',
-      'Searching live web context via Tavily...',
-      'Analyzing sentiment with Groq Llama-3...',
-      'Calculating risk index...',
-      'Generating competitor matrix...',
-      'Finalizing dashboard...'
+      'Authenticating user…',
+      'Deploying data scrapers…',
+      'Searching live web context via Tavily…',
+      'Analyzing sentiment with Groq Llama-3…',
+      'Calculating risk index…',
+      'Generating competitor matrix…',
+      'Finalizing dashboard…'
     ];
 
     async function loadData() {
@@ -244,14 +245,14 @@ function Dashboard() {
 
   if (loading && !error) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen gap-4 bg-slate-50 dark:bg-slate-900 transition-colors">
-        <Loader2 className="w-10 h-10 animate-spin text-black dark:text-white" />
+      <div role="status" aria-live="polite" className="flex flex-col items-center justify-center h-screen gap-4 bg-slate-50 dark:bg-slate-900 transition-colors">
+        <Loader2 aria-hidden="true" className="w-10 h-10 animate-spin text-black dark:text-white" />
         <div className="flex flex-col items-center space-y-1 text-center">
           <p className="text-sm font-semibold text-slate-900 dark:text-white animate-pulse">
             {loadingMessage}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Fetching real-time web context and analyzing sentiment...
+            Fetching real-time web context and analyzing sentiment…
           </p>
         </div>
       </div>
@@ -261,10 +262,14 @@ function Dashboard() {
   if (error) {
     return (
       <div className="flex items-center justify-center h-screen p-8 bg-slate-50 dark:bg-slate-900">
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 rounded-2xl p-6 max-w-md text-center">
-          <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-3" />
+        <div role="alert" className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 rounded-2xl p-6 max-w-md text-center">
+          <AlertCircle aria-hidden="true" className="w-8 h-8 text-red-500 mx-auto mb-3" />
           <p className="text-red-700 dark:text-red-400 font-medium text-sm">{error}</p>
-          <button onClick={() => window.location.reload()} className="mt-4 text-xs font-semibold text-red-600 dark:text-red-400 underline">
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-4 text-xs font-semibold text-red-600 dark:text-red-400 underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 rounded"
+          >
             Force Refresh
           </button>
         </div>
@@ -344,7 +349,7 @@ function Dashboard() {
         userEmail={displayEmail}
       />
 
-      <div className={`transition-all duration-300 ${isMobile ? 'lg:ml-0' : 'lg:ml-64'}`}>
+      <div className={`transition-[margin] duration-300 ${isMobile ? 'lg:ml-0' : 'lg:ml-64'}`}>
         <TopNavbar
           onMenuClick={() => setSidebarOpen(!sidebarOpen)}
           theme={theme}

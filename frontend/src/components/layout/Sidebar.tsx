@@ -2,8 +2,9 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { motion, AnimatePresence } from 'framer-motion';
+import { usePathname, useRouter } from 'next/navigation';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { supabase } from '@/lib/supabase';
 import {
   LayoutDashboard,
   Radar,
@@ -51,7 +52,16 @@ interface SidebarProps {
 
 export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const prefersReducedMotion = useReducedMotion();
   const [collapsed, setCollapsed] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    await supabase.auth.signOut();
+    router.push('/login');
+  };
 
   const initials =
     (userName || userEmail || '?')
@@ -84,15 +94,22 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
         </Link>
         {!isMobile && !collapsed && (
           <button
+            type="button"
             onClick={() => setCollapsed(!collapsed)}
-            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            aria-label="Collapse sidebar"
+            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           >
-            <ChevronLeft className="w-4 h-4 text-slate-400" />
+            <ChevronLeft aria-hidden="true" className="w-4 h-4 text-slate-400" />
           </button>
         )}
         {isMobile && (
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">
-            <X className="w-5 h-5 text-slate-500" />
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close navigation menu"
+            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          >
+            <X aria-hidden="true" className="w-5 h-5 text-slate-500" />
           </button>
         )}
       </div>
@@ -105,17 +122,22 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
             <button
               key={item.href}
               onClick={() => handleNavClick(item.href, item.comingSoon)}
+              type="button"
+              aria-label={collapsed ? `${item.label}${item.comingSoon ? ' (coming soon)' : ''}` : undefined}
+              aria-current={isActive ? 'page' : undefined}
+              aria-disabled={item.comingSoon || undefined}
               className={`
                 w-full flex items-center gap-3 px-3 py-2.5 rounded-xl
-                transition-all duration-200
-                ${isActive 
-                  ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' 
+                transition-colors duration-200
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
+                ${isActive
+                  ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
                   : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50'
                 }
                 ${collapsed ? 'justify-center' : ''}
               `}
             >
-              <span className={isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500'}>
+              <span aria-hidden="true" className={isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500'}>
                 {item.icon}
               </span>
               {!collapsed && (
@@ -152,8 +174,14 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
             </div>
           )}
           {!collapsed && (
-            <button className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
-              <LogOut className="w-4 h-4 text-slate-400" />
+            <button
+              type="button"
+              onClick={handleSignOut}
+              disabled={signingOut}
+              aria-label="Sign out"
+              className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <LogOut aria-hidden="true" className="w-4 h-4 text-slate-400" />
             </button>
           )}
         </div>
@@ -168,17 +196,17 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
         {isOpen && (
           <>
             <motion.div
-              initial={{ opacity: 0 }}
+              initial={prefersReducedMotion ? false : { opacity: 0 }}
               animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              exit={prefersReducedMotion ? undefined : { opacity: 0 }}
               className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50"
               onClick={onClose}
             />
             <motion.div
-              initial={{ x: -300 }}
+              initial={prefersReducedMotion ? false : { x: -300 }}
               animate={{ x: 0 }}
-              exit={{ x: -300 }}
-              transition={{ type: 'spring', damping: 25 }}
+              exit={prefersReducedMotion ? undefined : { x: -300 }}
+              transition={prefersReducedMotion ? { duration: 0 } : { type: 'spring', damping: 25 }}
               className="fixed left-0 top-0 bottom-0 w-72 z-50"
             >
               {sidebarContent}
@@ -193,7 +221,7 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
   return (
     <div className={`
       fixed left-0 top-0 bottom-0 z-40
-      transition-all duration-300
+      transition-[width] duration-300
       ${collapsed ? 'w-20' : 'w-64'}
     `}>
       {sidebarContent}

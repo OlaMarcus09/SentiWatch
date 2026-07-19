@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 export default function CreateEntityForm({ userToken }: { userToken: string }) {
@@ -11,6 +11,7 @@ export default function CreateEntityForm({ userToken }: { userToken: string }) {
   const [competitors, setCompetitors] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   const personas = [
     { id: 'business', label: 'Business / Brand', icon: '🏢' },
@@ -62,105 +63,128 @@ export default function CreateEntityForm({ userToken }: { userToken: string }) {
       });
 
       if (!response.ok) throw new Error('Failed to create profile');
-      
+
       const data = await response.json();
       // Route the user using your app's query parameter structure
       router.push(`/?entity_id=${data.entity_id}`);
     } catch (err) {
       console.error(err);
-      setError('Could not create your profile. Please check your connection and try again.');
+      setError('Could not create your profile. Check your connection and try again.');
+      nameRef.current?.focus();
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-8 bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
-      
+    <form onSubmit={handleSubmit} className="max-w-2xl mx-auto space-y-8 bg-white dark:bg-slate-800 p-8 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700">
+
       {/* 1. Entity Name */}
       <div className="space-y-2">
-        <label className="text-sm font-medium text-gray-900">Profile Name</label>
+        <label htmlFor="entity-name" className="text-sm font-medium text-gray-900 dark:text-slate-100">Profile Name</label>
         <input
+          id="entity-name"
+          name="entity-name"
+          ref={nameRef}
           type="text"
           required
+          autoComplete="off"
+          spellCheck={false}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Enter your brand or personal name"
-          className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent transition-all placeholder:text-gray-400"
+          placeholder="e.g. Cowrywise…"
+          className="w-full px-4 py-3 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-900 dark:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-blue-500 focus:border-transparent transition-colors placeholder:text-gray-400 dark:placeholder:text-slate-500"
         />
       </div>
 
-      {/* 2. Persona Selection (Framer-style Radio Group) */}
-      <div className="space-y-3">
-        <label className="text-sm font-medium text-gray-900">Select Profile Context</label>
-        <div className="grid grid-cols-2 gap-3">
-          {personas.map((p) => (
-            <div
-              key={p.id}
-              onClick={() => setProfileType(p.id)}
-              className={`cursor-pointer p-4 rounded-xl border flex items-center space-x-3 transition-all duration-200 ${
-                profileType === p.id 
-                  ? 'border-black bg-gray-50/50 shadow-sm' 
-                  : 'border-gray-100 hover:border-gray-300'
-              }`}
-            >
-              <span className="text-xl">{p.icon}</span>
-              <span className={`text-sm font-medium ${profileType === p.id ? 'text-black' : 'text-gray-600'}`}>
-                {p.label}
-              </span>
-            </div>
-          ))}
+      {/* 2. Persona Selection (accessible radio group) */}
+      <fieldset className="space-y-3">
+        <legend className="text-sm font-medium text-gray-900 dark:text-slate-100">Select Profile Context</legend>
+        <div role="radiogroup" aria-label="Profile context" className="grid grid-cols-2 gap-3">
+          {personas.map((p) => {
+            const selected = profileType === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setProfileType(p.id)}
+                className={`text-left cursor-pointer p-4 rounded-xl border flex items-center space-x-3 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-blue-500 ${
+                  selected
+                    ? 'border-black dark:border-blue-500 bg-gray-50/50 dark:bg-slate-700/50 shadow-sm'
+                    : 'border-gray-100 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500'
+                }`}
+              >
+                <span aria-hidden="true" className="text-xl">{p.icon}</span>
+                <span className={`text-sm font-medium ${selected ? 'text-black dark:text-white' : 'text-gray-600 dark:text-slate-300'}`}>
+                  {p.label}
+                </span>
+              </button>
+            );
+          })}
         </div>
-      </div>
+      </fieldset>
 
       {/* 3. Competitor Tags */}
       <div className="space-y-2">
-        <label className="text-sm font-medium text-gray-900 flex justify-between">
+        <label htmlFor="competitor-input" className="text-sm font-medium text-gray-900 dark:text-slate-100 flex justify-between">
           <span>Competitors / Tracked Entities</span>
-          <span className="text-gray-400 font-normal">{competitors.length}/3 tracked</span>
+          <span className="text-gray-400 dark:text-slate-500 font-normal">{competitors.length}/3 tracked</span>
         </label>
-        <div className="p-2 border border-gray-200 rounded-lg focus-within:ring-2 focus-within:ring-black focus-within:border-transparent transition-all min-h-[56px] flex flex-wrap gap-2 items-center bg-white">
+        <div className="p-2 border border-gray-200 dark:border-slate-600 rounded-lg focus-within:ring-2 focus-within:ring-black dark:focus-within:ring-blue-500 focus-within:border-transparent transition-colors min-h-[56px] flex flex-wrap gap-2 items-center bg-white dark:bg-slate-900">
           {competitors.map((comp) => (
-            <span key={comp} className="flex items-center space-x-1 bg-gray-100 text-gray-800 text-xs font-medium px-2.5 py-1.5 rounded-md">
+            <span key={comp} className="flex items-center space-x-1 bg-gray-100 dark:bg-slate-700 text-gray-800 dark:text-slate-200 text-xs font-medium px-2.5 py-1.5 rounded-md">
               <span>{comp}</span>
-              <button type="button" onClick={() => removeCompetitor(comp)} className="text-gray-500 hover:text-black">
+              <button
+                type="button"
+                onClick={() => removeCompetitor(comp)}
+                aria-label={`Remove ${comp}`}
+                className="text-gray-500 dark:text-slate-400 hover:text-black dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-blue-500 rounded"
+              >
                 &times;
               </button>
             </span>
           ))}
           <input
+            id="competitor-input"
+            name="competitor"
             type="text"
+            autoComplete="off"
+            spellCheck={false}
             value={competitorInput}
             onChange={(e) => setCompetitorInput(e.target.value)}
             onKeyDown={handleAddCompetitor}
             disabled={competitors.length >= 3}
-            placeholder={competitors.length >= 3 ? "Limit reached" : "Type a competitor & press Enter..."}
-            className="flex-1 min-w-[120px] outline-none text-sm px-2 py-1 disabled:bg-transparent"
+            placeholder={competitors.length >= 3 ? 'Limit reached' : 'Type a competitor & press Enter…'}
+            className="flex-1 min-w-[120px] bg-transparent text-gray-900 dark:text-slate-100 outline-none text-sm px-2 py-1 disabled:bg-transparent placeholder:text-gray-400 dark:placeholder:text-slate-500"
           />
         </div>
-        <p className="text-xs text-gray-500">Track competitors to automatically generate gap-analysis recommendations.</p>
+        <p className="text-xs text-gray-500 dark:text-slate-400">Track competitors to automatically generate gap-analysis recommendations.</p>
       </div>
 
       {/* Error Message */}
-      {error && (
-        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+      <div aria-live="polite">
+        {error && (
+          <div role="alert" className="rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">
+            {error}
+          </div>
+        )}
+      </div>
 
       {/* Submit Button */}
       <button
         type="submit"
         disabled={isLoading || !name}
-        className="w-full bg-black text-white py-3.5 rounded-lg font-medium text-sm hover:bg-gray-900 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
+        className="w-full bg-black dark:bg-blue-600 text-white py-3.5 rounded-lg font-medium text-sm hover:bg-gray-900 dark:hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-800"
       >
         {isLoading ? (
           <span className="flex items-center space-x-2">
-            <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+            <svg aria-hidden="true" className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
             </svg>
-            <span>Deploying Agents...</span>
+            <span>Deploying Agents…</span>
           </span>
         ) : (
           'Initialize SentiWatch Environment'
