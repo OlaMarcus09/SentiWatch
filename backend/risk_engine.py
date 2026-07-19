@@ -323,9 +323,120 @@ def send_email(entity: dict, score: dict) -> bool:
     return True
 
 
+# -----------------------------------------------------
+# Recommendation Engine (EDU campus operations)
+# -----------------------------------------------------
+
+def generate_recommendation_matrix(score: int, category: str) -> str:
+    """
+    Returns formal, contextual university operations recommendations
+    based on risk bands and primary campus trigger categories.
+    """
+    category = category.lower().strip()
+
+    if score <= 25:
+        return (
+            "ACTION PLAN: Maintaining Campus Stability\n\n"
+            "1. CAMPUS STATUS: Sentiment indicators are stable and within safe operating thresholds.\n"
+            "2. DEPLOYMENT TIMELINE: No active crisis intervention required.\n"
+            "3. RECOMMENDATION: Continue routine monitoring across student channels. Maintain standard "
+            "response SLAs for low-risk complaints and publish periodic student guidance updates to preserve trust."
+        )
+
+    elif 26 <= score <= 50:
+        if category in ["portal_issues"]:
+            return (
+                "ACTION PLAN: Portal Reliability Triage\n\n"
+                "1. CAMPUS STATUS: Early cluster of complaints indicates intermittent portal access or transaction failures.\n"
+                "2. DEPLOYMENT TIMELINE: IT/Portal team intervention within 24 Hours.\n"
+                "3. RECOMMENDATION: Assign IT operations to validate uptime, login flow, payment/registration endpoints, and "
+                "error logs. Publish a student-facing incident notice with expected resolution time and alternate submission routes "
+                "where needed."
+            )
+        elif category in ["fees", "scholarships"]:
+            return (
+                "ACTION PLAN: Financial Support Clarification\n\n"
+                "1. CAMPUS STATUS: Low-to-moderate concern detected around fees, payment windows, or scholarship communication.\n"
+                "2. DEPLOYMENT TIMELINE: Bursary response within 24 Hours.\n"
+                "3. RECOMMENDATION: Bursary should issue a clear breakdown of payment timelines, penalties, waivers, and scholarship "
+                "eligibility criteria. Open an escalation channel for affected students and publish FAQ updates."
+            )
+        elif category in ["admissions", "exams"]:
+            return (
+                "ACTION PLAN: Academic Process Alignment\n\n"
+                "1. CAMPUS STATUS: Minor but visible dissatisfaction around admissions or exam-related processes.\n"
+                "2. DEPLOYMENT TIMELINE: Registrar/Academic Registry review within 24 Hours.\n"
+                "3. RECOMMENDATION: Verify published schedules, candidate lists, venue information, and policy notices. "
+                "Release a formal clarification bulletin and provide a correction window for documented errors."
+            )
+        else:
+            return (
+                "ACTION PLAN: Baseline Campus Monitoring\n\n"
+                "1. CAMPUS STATUS: Low-level critical chatter detected outside routine operational themes.\n"
+                "2. DEPLOYMENT TIMELINE: Internal assessment within 24 Hours.\n"
+                "3. RECOMMENDATION: Route issue to the relevant unit head, gather evidence from student-facing systems, "
+                "and issue a concise internal brief before any broad public communication."
+            )
+
+    elif 51 <= score <= 75:
+        if category in ["portal_issues"]:
+            return (
+                "ACTION PLAN: Critical Portal Continuity Protocol\n\n"
+                "1. CAMPUS STATUS: High-risk disruption signals around portal functionality and student digital access.\n"
+                "2. DEPLOYMENT TIMELINE: IT/Portal leadership intervention within 12 Hours.\n"
+                "3. RECOMMENDATION: Activate incident-response workflow, assign named technical owners, and provide "
+                "time-bound student advisories. Coordinate with Registrar and Bursary to extend affected deadlines where necessary."
+            )
+        elif category in ["hostels", "campus_life", "lecturers"]:
+            return (
+                "ACTION PLAN: Student Welfare Safeguard Activation\n\n"
+                "1. CAMPUS STATUS: Elevated concerns indicate possible welfare, accommodation, or student-staff tension.\n"
+                "2. DEPLOYMENT TIMELINE: Student Affairs intervention within 12 Hours.\n"
+                "3. RECOMMENDATION: Student Affairs should deploy welfare officers, open confidential reporting channels, "
+                "and publish support contacts. Coordinate with relevant departments for immediate de-escalation and visible follow-up."
+            )
+        elif category in ["fees", "scholarships"]:
+            return (
+                "ACTION PLAN: Financial Distress Mitigation\n\n"
+                "1. CAMPUS STATUS: High-volume concern around fees burden, payment enforcement, or scholarship delays.\n"
+                "2. DEPLOYMENT TIMELINE: Bursary leadership response within 12 Hours.\n"
+                "3. RECOMMENDATION: Issue an official fee-relief communication (where policy permits), confirm scholarship "
+                "processing status, and provide case-by-case support channels for students at risk of exclusion."
+            )
+        elif category in ["admissions", "exams"]:
+            return (
+                "ACTION PLAN: Academic Integrity & Access Escalation\n\n"
+                "1. CAMPUS STATUS: Major confidence risk around admissions fairness or examination processes.\n"
+                "2. DEPLOYMENT TIMELINE: Registrar-led escalation within 12 Hours.\n"
+                "3. RECOMMENDATION: Registrar should publish verified process documentation, assign an appeal desk, "
+                "and communicate remediation timelines for affected cohorts."
+            )
+        else:
+            return (
+                "ACTION PLAN: Escalated Campus Triage\n\n"
+                "1. CAMPUS STATUS: High volume of negative sentiment impacting institutional trust.\n"
+                "2. DEPLOYMENT TIMELINE: Leadership review within 12 Hours.\n"
+                "3. RECOMMENDATION: Convene cross-unit response meeting (Registrar, Bursary, IT, Student Affairs), "
+                "produce a unified action brief, and publish coordinated status updates."
+            )
+
+    else:
+        return (
+            "CRISIS ACTIVATION MANDATE: Campus-wide Escalation\n\n"
+            "1. CAMPUS STATUS: Critical threat level with rapidly compounding public concern across student channels.\n"
+            "2. DEPLOYMENT TIMELINE: **IMMEDIATE DEPLOYMENT (Under 2 Hours)**\n"
+            "3. RECOMMENDATION: Activate the university emergency communications protocol immediately. Establish a joint "
+            "incident room across Registrar, Bursary, IT/Portal, and Student Affairs. Release a verified campus-wide advisory, "
+            "state immediate protections for students, and publish update intervals until stabilization is confirmed."
+        )
+
+
 # ──────────────────────────────────────────────────────
 # Main Orchestrator
+# Calls fetch_mentions() for joined mention+sentiment data,
+# save_risk_score() (preserving mention counts), and send_email().
 # ──────────────────────────────────────────────────────
+
 def calculate_risk_and_alert(entity_id: str) -> dict:
     entity = get_entity(entity_id)
     if not entity:
