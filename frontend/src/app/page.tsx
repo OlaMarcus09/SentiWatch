@@ -18,12 +18,10 @@ import RecommendationCenter from '../components/dashboard/RecommendationCenter';
 import MentionFeed from '../components/dashboard/MentionFeed';
 import AlertCenter from '../components/dashboard/AlertCenter';
 import SentimentChart from '../components/SentimentChart';
+import CategoryHeatmap from '../components/CategoryHeatmap';
 import Card from '../components/ui/Card';
 import CreateEntityForm from '../components/CreateEntityForm';
 import EntitySelector from '../components/EntitySelector';
-
-// Pivot Widgets
-import StudentVisaAuditWidget from '../components/dashboard/StudentVisaAuditWidget';
 import CompetitorComparisonMatrix from '../components/dashboard/CompetitorComparisonMatrix';
 
 export default function Page() {
@@ -48,30 +46,38 @@ function Dashboard() {
   const [loadingMessage, setLoadingMessage] = useState('Initializing secure connection...');
   const [error, setError] = useState<string | null>(null);
   const [userToken, setUserToken] = useState<string>('');
-  
+
+  // Identity
+  const [displayName, setDisplayName] = useState<string>('');
+  const [displayEmail, setDisplayEmail] = useState<string>('');
+
   // Data State
   const [allEntities, setAllEntities] = useState<any[]>([]);
   const [currentEntity, setCurrentEntity] = useState<any>(null);
   const [competitorsData, setCompetitorsData] = useState<any[]>([]);
   const [mentions, setMentions] = useState<any[]>([]);
   const [finalRiskScore, setFinalRiskScore] = useState(0);
+  const [previousRiskScore, setPreviousRiskScore] = useState<number | null>(null);
   const [recommendation, setRecommendation] = useState<any>(null);
   const [riskScoreData, setRiskScoreData] = useState<any>(null);
-  
+
   // UI State
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
   useEffect(() => {
-    const isDark = document.documentElement.classList.contains('dark');
+    const stored = typeof window !== 'undefined' ? localStorage.getItem('theme') : null;
+    const isDark = stored ? stored === 'dark' : document.documentElement.classList.contains('dark');
+    document.documentElement.classList.toggle('dark', isDark);
     setTheme(isDark ? 'dark' : 'light');
   }, []);
 
   const toggleTheme = () => {
     const newTheme = theme === 'light' ? 'dark' : 'light';
     setTheme(newTheme);
-    document.documentElement.classList.toggle('dark');
+    document.documentElement.classList.toggle('dark', newTheme === 'dark');
+    if (typeof window !== 'undefined') localStorage.setItem('theme', newTheme);
   };
 
   useEffect(() => {
@@ -111,6 +117,18 @@ function Dashboard() {
 
         if (isMounted) setUserToken(session.access_token);
 
+        // Derive a single, consistent identity from the Supabase session.
+        const email = session.user.email || '';
+        const metaName =
+          (session.user.user_metadata?.full_name as string) ||
+          (session.user.user_metadata?.name as string) ||
+          '';
+        const name = metaName || (email ? email.split('@')[0] : 'there');
+        if (isMounted) {
+          setDisplayName(name);
+          setDisplayEmail(email);
+        }
+
         const userId = session.user.id;
 
         // 1. Fetch User Entities
@@ -149,14 +167,17 @@ function Dashboard() {
             setLoadingMessage(loadingMessages[pollCount]);
           }
 
-          // Check if FastAPI background worker has finished saving the risk score
-          const { data: riskData } = await supabase
+          // Check if FastAPI background worker has finished saving the risk score.
+          // Fetch the two most recent rows so we can compute a real trend delta.
+          const { data: riskRows } = await supabase
             .from('risk_scores')
             .select('*')
             .eq('entity_id', activeEntity.id)
             .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
+            .limit(2);
+
+          const riskData = riskRows?.[0] || null;
+          const priorRisk = riskRows?.[1] || null;
 
           if (!riskData && pollCount < MAX_POLLS) {
             // Data isn't ready yet, FastAPI is still running. Try again in 3 seconds.
@@ -196,6 +217,7 @@ function Dashboard() {
           if (isMounted) {
             setMentions(mergedMentions);
             setFinalRiskScore(Math.min(riskData?.score || 0, 100));
+            setPreviousRiskScore(priorRisk ? Math.min(priorRisk.score || 0, 100) : null);
             setRiskScoreData(riskData);
             setRecommendation(recData);
             setLoading(false);
@@ -276,55 +298,111 @@ function Dashboard() {
 
   const rootCauseSummary = riskScoreData?.root_cause_summary || '';
   const currentEntityName = currentEntity?.name || 'Your Profile';
-  const currentProfileType = currentEntity?.profile_type || 'business';
+
+  // Real trend: change vs the previous saved risk score (null when no prior data).
+  const trendDelta =
+    previousRiskScore !== null ? finalRiskScore - previousRiskScore : null;
+
+  // Real category breakdown from the saved risk score (feeds the heatmap).
+  const categoryBreakdown: Record<string, number> =
+    riskScoreData?.category_breakdown || {};
+
+  // Real alerts: high-severity negative mentions, most severe first.
+  const alerts = mentions
+    .filter((m) => {
+      const s = m.sentiment_results?.[0];
+      return s?.label === 'negative' && (s?.severity || 0) >= 8;
+    })
+    .sort(
+      (a, b) =>
+        (b.sentiment_results?.[0]?.severity || 0) -
+        (a.sentiment_results?.[0]?.severity || 0)
+    )
+    .slice(0, 5)
+    .map((m) => {
+      const severity = m.sentiment_results?.[0]?.severity || 0;
+      const risk: 'critical' | 'high' | 'medium' | 'low' =
+        severity >= 9 ? 'critical' : severity >= 8 ? 'high' : 'medium';
+      return {
+        id: m.id,
+        title:
+          m.sentiment_results?.[0]?.root_cause ||
+          (m.content ? String(m.content).slice(0, 80) : 'Negative mention detected'),
+        source: m.source || 'Unknown',
+        risk,
+        timestamp: m.created_at,
+      };
+    });
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 transition-colors duration-200">
-      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} isMobile={isMobile} />
+      <Sidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        isMobile={isMobile}
+        userName={displayName}
+        userEmail={displayEmail}
+      />
 
       <div className={`transition-all duration-300 ${isMobile ? 'lg:ml-0' : 'lg:ml-64'}`}>
-        <TopNavbar onMenuClick={() => setSidebarOpen(!sidebarOpen)} theme={theme} onThemeToggle={toggleTheme} entityName={currentEntityName} />
+        <TopNavbar
+          onMenuClick={() => setSidebarOpen(!sidebarOpen)}
+          theme={theme}
+          onThemeToggle={toggleTheme}
+          entityName={currentEntityName}
+          userName={displayName}
+          userEmail={displayEmail}
+        />
 
         <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8 space-y-6 md:space-y-8">
-          
-          <HeroSection userName="Marcus" riskScore={finalRiskScore} trend={0} />
-          
-          <KPICards totalMentions={mentions.length} negative={negative} positive={positive} alerts={finalRiskScore > 60 ? 1 : 0} />
 
-          {currentProfileType === 'student' ? (
-            <StudentVisaAuditWidget mentions={mentions} riskScore={finalRiskScore} />
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card className="flex flex-col items-center justify-center py-6">
-                <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">Live Risk Index</h3>
-                <RiskGauge score={finalRiskScore} />
-              </Card>
-              <AIInsights rootCauseSummary={rootCauseSummary} negativeCount={negative} positiveCount={positive} totalMentions={mentions.length} />
-            </div>
-          )}
+          {/* ── Zone 1: Overview ── */}
+          <HeroSection userName={displayName} riskScore={finalRiskScore} trend={trendDelta} />
 
+          <KPICards totalMentions={mentions.length} negative={negative} positive={positive} />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Card hover={false} className="flex flex-col items-center justify-center py-6">
+              <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">Live Risk Index</h3>
+              <RiskGauge score={finalRiskScore} />
+            </Card>
+            <AIInsights rootCauseSummary={rootCauseSummary} negativeCount={negative} positiveCount={positive} totalMentions={mentions.length} />
+          </div>
+
+          {/* ── Zone 2: Insights ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Card hover={false}>
+              <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">Sentiment Breakdown</h3>
+              <SentimentChart positive={positive} neutral={neutral} negative={negative} />
+            </Card>
+            <Card hover={false}>
+              <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">Category Breakdown</h3>
+              <CategoryHeatmap breakdown={categoryBreakdown} />
+            </Card>
+          </div>
+
+          {/* ── Zone 3: Actions ── */}
           <RecommendationCenter recommendation={recommendation} score={finalRiskScore} />
+
+          <AlertCenter alerts={alerts} />
 
           {competitorsData.length > 0 && (
             <CompetitorComparisonMatrix primaryEntity={currentEntity} competitors={competitorsData} />
           )}
 
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1"><CreateEntityForm userToken={userToken} /></div>
-            <div className="bg-white dark:bg-slate-800/80 p-4 rounded-2xl border border-slate-200/60 dark:border-slate-700/60 shadow-sm flex items-end">
-              <EntitySelector entities={allEntities} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white dark:bg-slate-800/80 rounded-2xl border border-slate-200/60 dark:border-slate-700/60 p-6">
-              <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">Sentiment Breakdown</h3>
-              <SentimentChart positive={positive} neutral={neutral} negative={negative} />
-            </div>
-            <AlertCenter alerts={[]} />
-          </div>
-
+          {/* ── Zone 4: Activity ── */}
           <MentionFeed mentions={mentions} />
+
+          {/* ── Zone 5: Manage Entities ── */}
+          <section className="pt-2">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+              <h2 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Manage Entities</h2>
+              <Card hover={false} className="p-3">
+                <EntitySelector entities={allEntities} />
+              </Card>
+            </div>
+            <CreateEntityForm userToken={userToken} />
+          </section>
         </main>
       </div>
     </div>

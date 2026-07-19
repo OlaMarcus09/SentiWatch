@@ -8,7 +8,6 @@ interface KPICardsProps {
   totalMentions: number;
   negative: number;
   positive: number;
-  alerts: number;
 }
 
 const container = {
@@ -26,7 +25,7 @@ const item = {
   show: { opacity: 1, y: 0 },
 };
 
-export default function KPICards({ totalMentions, negative, positive, alerts }: KPICardsProps) {
+export default function KPICards({ totalMentions, negative, positive }: KPICardsProps) {
   const cards = [
     {
       label: 'Total Mentions',
@@ -34,7 +33,6 @@ export default function KPICards({ totalMentions, negative, positive, alerts }: 
       icon: Activity,
       color: 'text-blue-600',
       bg: 'bg-blue-50 dark:bg-blue-900/20',
-      change: '+12%',
     },
     {
       label: 'Risk Index',
@@ -42,7 +40,6 @@ export default function KPICards({ totalMentions, negative, positive, alerts }: 
       icon: AlertTriangle,
       color: 'text-orange-500',
       bg: 'bg-orange-50 dark:bg-orange-900/20',
-      change: '+8%',
       suffix: '%',
     },
     {
@@ -51,7 +48,6 @@ export default function KPICards({ totalMentions, negative, positive, alerts }: 
       icon: ThumbsDown,
       color: 'text-red-600',
       bg: 'bg-red-50 dark:bg-red-900/20',
-      change: '-4%',
     },
     {
       label: 'Positive',
@@ -59,7 +55,6 @@ export default function KPICards({ totalMentions, negative, positive, alerts }: 
       icon: ThumbsUp,
       color: 'text-green-600',
       bg: 'bg-green-50 dark:bg-green-900/20',
-      change: '+18%',
     },
   ];
 
@@ -77,11 +72,6 @@ export default function KPICards({ totalMentions, negative, positive, alerts }: 
               <div className={`p-2 rounded-xl ${card.bg}`}>
                 <card.icon className={`w-5 h-5 ${card.color}`} />
               </div>
-              <span className={`text-xs font-medium ${
-                card.change.startsWith('+') ? 'text-green-600' : 'text-red-600'
-              }`}>
-                {card.change}
-              </span>
             </div>
             <div className="mt-3">
               <p className="text-2xl font-bold text-slate-800 dark:text-white">

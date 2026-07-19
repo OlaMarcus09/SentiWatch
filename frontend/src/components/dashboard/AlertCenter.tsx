@@ -18,24 +18,7 @@ interface AlertCenterProps {
 }
 
 export default function AlertCenter({ alerts = [] }: AlertCenterProps) {
-  const mockAlerts: Alert[] = [
-    {
-      id: '1',
-      title: 'Negative mention velocity spike detected',
-      source: 'Nigerian News Feed',
-      risk: 'critical',
-      timestamp: new Date().toISOString(),
-    },
-    {
-      id: '2',
-      title: 'Google Review sentiment dropped 15%',
-      source: 'Google Reviews',
-      risk: 'high',
-      timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    },
-  ];
-
-  const displayAlerts = alerts.length > 0 ? alerts : mockAlerts;
+  const displayAlerts = alerts;
 
   const riskIcons = {
     critical: <AlertCircle className="w-4 h-4 text-red-500" />,

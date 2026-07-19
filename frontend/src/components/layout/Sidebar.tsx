@@ -45,17 +45,26 @@ interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
   isMobile: boolean;
+  userName?: string;
+  userEmail?: string;
 }
 
-export default function Sidebar({ isOpen, onClose, isMobile }: SidebarProps) {
+export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail }: SidebarProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
 
+  const initials =
+    (userName || userEmail || '?')
+      .split(/[\s@._-]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((p) => p[0]?.toUpperCase())
+      .join('') || '?';
+
   const handleNavClick = (href: string, comingSoon?: boolean) => {
-    if (comingSoon) {
-      alert('🚀 Coming soon! This feature is in development.');
-      return;
-    }
+    // "Coming soon" items are non-navigable; do nothing rather than
+    // firing a blocking browser alert().
+    if (comingSoon) return;
     if (isMobile) onClose();
   };
 
@@ -134,12 +143,12 @@ export default function Sidebar({ isOpen, onClose, isMobile }: SidebarProps) {
           ${collapsed ? 'justify-center' : ''}
         `}>
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
-            <span>MA</span>
+            <span>{initials}</span>
           </div>
           {!collapsed && (
-            <div className="flex-1 text-left">
-              <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Marcus Adeyemi</p>
-              <p className="text-xs text-slate-400 dark:text-slate-500">Pro Plan</p>
+            <div className="flex-1 text-left min-w-0">
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-200 truncate">{userName || 'Account'}</p>
+              <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{userEmail || ''}</p>
             </div>
           )}
           {!collapsed && (

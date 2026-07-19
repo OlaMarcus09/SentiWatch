@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
-import { Zap, Clock, TrendingDown, Check, X, ExternalLink } from 'lucide-react';
+import { Zap, Clock, Check, ExternalLink } from 'lucide-react';
 
 interface RecommendationCenterProps {
   recommendation: any;
@@ -53,15 +53,9 @@ export default function RecommendationCenter({ recommendation, score }: Recommen
           </div>
 
           <div className="space-y-2">
-            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-              {recommendation.action_plan ? recommendation.action_plan.split('\n')[0] : 'Review your reputation data.'}
+            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line">
+              {recommendation.action_plan || 'Review your reputation data.'}
             </p>
-            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-              <TrendingDown className="w-3.5 h-3.5 text-green-500" />
-              <span>Estimated impact: <strong className="text-green-600 dark:text-green-400">-12%</strong> risk score</span>
-              <span className="text-slate-300 dark:text-slate-600">•</span>
-              <span>30 min estimated time</span>
-            </div>
           </div>
 
           <div className="flex items-center gap-2 pt-1">
