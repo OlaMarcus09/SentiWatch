@@ -1,7 +1,9 @@
 'use client';
 
-import { TrendingUp, ArrowDownRight, ArrowUpRight, BarChart3, Target } from 'lucide-react';
+import { useState } from 'react';
+import { BarChart3, Target } from 'lucide-react';
 import Card from '../ui/Card';
+import CompetitorMentionsModal from './CompetitorMentionsModal';
 
 interface Competitor {
   id: string;
@@ -25,7 +27,9 @@ interface CompetitorMatrixProps {
 }
 
 export default function CompetitorComparisonMatrix({ primaryEntity, primaryRiskScore, competitors }: CompetitorMatrixProps) {
-  
+
+  const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
+
   // Quick analyzer to pull out worst-performing categories for competitors
   const getVulnerability = (breakdown: Record<string, number> | undefined) => {
     if (!breakdown || Object.keys(breakdown).length === 0) return 'Stable Operational Baseline';
@@ -49,7 +53,7 @@ export default function CompetitorComparisonMatrix({ primaryEntity, primaryRiskS
             Competitor Intelligence & Review Matrix
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Real-time vulnerability mapping to capitalize on competitor bad reviews.
+            Real-time vulnerability mapping to capitalize on competitor bad reviews. Click a competitor to see their mentions.
           </p>
         </div>
         <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-900/60 px-3 py-1.5 rounded-lg border border-slate-100 dark:border-slate-800">
@@ -106,8 +110,14 @@ export default function CompetitorComparisonMatrix({ primaryEntity, primaryRiskS
 
               return (
                 <tr key={comp.id} className="hover:bg-slate-50/40 dark:hover:bg-slate-800/5 transition-colors">
-                  <td className="p-4 font-medium text-slate-700 dark:text-slate-300">
-                    {comp.name}
+                  <td className="p-4 font-medium">
+                    <button
+                      type="button"
+                      onClick={() => setSelected({ id: comp.id, name: comp.name })}
+                      className="text-blue-600 dark:text-blue-400 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-blue-500 rounded"
+                    >
+                      {comp.name}
+                    </button>
                   </td>
                   <td className="p-4 text-center">
                     <span className={`font-mono text-xs font-bold px-2.5 py-1 rounded-md ${
@@ -149,6 +159,10 @@ export default function CompetitorComparisonMatrix({ primaryEntity, primaryRiskS
           </tbody>
         </table>
       </div>
+
+      {selected && (
+        <CompetitorMentionsModal competitor={selected} onClose={() => setSelected(null)} />
+      )}
     </Card>
   );
 }
