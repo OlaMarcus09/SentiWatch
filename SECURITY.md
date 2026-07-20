@@ -147,6 +147,21 @@ using (
 Replicate the child-table pattern for `sentiment_results` (join through
 `mentions` → `monitored_entities`), `risk_scores`, and `recommendations`.
 
+```sql
+-- Read competitor links only for a primary entity you own.
+-- REQUIRED: without this, RLS fails closed and the Competitors tab renders
+-- the empty state even when links exist (the browser reads via the anon key).
+create policy "competitor_links_select_own"
+on public.competitor_links for select
+using (
+  exists (
+    select 1 from public.monitored_entities e
+    where e.id = competitor_links.primary_entity_id
+      and e.user_id = auth.uid()
+  )
+);
+```
+
 > The backend uses the **service-role** key, which bypasses RLS by design — all
 > its writes are intentional and authenticated at the endpoint layer. RLS
 > protects the **anon-key path used by the browser**, which is what matters here.

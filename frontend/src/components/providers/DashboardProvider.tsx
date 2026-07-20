@@ -168,10 +168,17 @@ export default function DashboardProvider({
         if (isMounted) setCurrentEntity(activeEntity);
 
         // 2. Fetch Competitors
-        const { data: compLinks } = await supabase
+        const { data: compLinks, error: compLinksError } = await supabase
           .from('competitor_links')
           .select('competitor_entity_id, monitored_entities!competitor_entity_id(*, risk_scores(*))')
           .eq('primary_entity_id', activeEntity.id);
+
+        if (compLinksError) {
+          // A blocked read (e.g. a missing RLS SELECT policy on competitor_links)
+          // otherwise looks identical to "no competitors" — surface it instead of
+          // silently rendering the empty state. See SECURITY.md §4d.
+          console.error('Failed to load competitors:', compLinksError);
+        }
 
         if (isMounted && compLinks) {
           setCompetitorsData(compLinks.map((link: any) => link.monitored_entities));
