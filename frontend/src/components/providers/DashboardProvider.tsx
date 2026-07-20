@@ -163,8 +163,26 @@ export default function DashboardProvider({
           return;
         }
 
-        if (isMounted) setAllEntities(entities);
-        const activeEntity = entities.find(e => e.id === entityIdParam) || entities[0];
+        // Competitors are stored as owned monitored_entities too, so they'd
+        // otherwise show up in the dashboard/selector alongside real brands.
+        // Exclude any entity that is linked as a competitor (RLS scopes
+        // competitor_links to the user's own entities) so competitors only
+        // surface on the Competitors tab.
+        const { data: linkedCompetitors } = await supabase
+          .from('competitor_links')
+          .select('competitor_entity_id');
+        const competitorIds = new Set(
+          (linkedCompetitors || []).map((l: any) => l.competitor_entity_id)
+        );
+        const primaryEntities = entities.filter((e) => !competitorIds.has(e.id));
+
+        if (primaryEntities.length === 0) {
+          if (isMounted) { setAllEntities([]); setLoading(false); }
+          return;
+        }
+
+        if (isMounted) setAllEntities(primaryEntities);
+        const activeEntity = primaryEntities.find(e => e.id === entityIdParam) || primaryEntities[0];
         if (isMounted) setCurrentEntity(activeEntity);
 
         // 2. Fetch Competitors
