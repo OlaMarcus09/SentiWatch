@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -32,14 +32,14 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" />, href: '/' },
-  { label: 'Monitoring', icon: <Radar className="w-5 h-5" />, href: '/monitoring', comingSoon: true },
-  { label: 'Alerts', icon: <Bell className="w-5 h-5" />, href: '/alerts', comingSoon: true },
+  { label: 'Monitoring', icon: <Radar className="w-5 h-5" />, href: '/monitoring' },
+  { label: 'Alerts', icon: <Bell className="w-5 h-5" />, href: '/alerts' },
   { label: 'Reports', icon: <FileText className="w-5 h-5" />, href: '/reports', comingSoon: true },
-  { label: 'Recommendations', icon: <Lightbulb className="w-5 h-5" />, href: '/recommendations', comingSoon: true },
-  { label: 'Competitors', icon: <Users className="w-5 h-5" />, href: '/competitors', comingSoon: true },
+  { label: 'Recommendations', icon: <Lightbulb className="w-5 h-5" />, href: '/recommendations' },
+  { label: 'Competitors', icon: <Users className="w-5 h-5" />, href: '/competitors' },
   { label: 'Integrations', icon: <Puzzle className="w-5 h-5" />, href: '/integrations', comingSoon: true },
   { label: 'Billing', icon: <CreditCard className="w-5 h-5" />, href: '/billing', comingSoon: true },
-  { label: 'Settings', icon: <Settings className="w-5 h-5" />, href: '/settings', comingSoon: true },
+  { label: 'Settings', icon: <Settings className="w-5 h-5" />, href: '/settings' },
 ];
 
 interface SidebarProps {
@@ -52,6 +52,8 @@ interface SidebarProps {
 
 export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail }: SidebarProps) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const entityId = searchParams.get('entity_id');
   const router = useRouter();
   const prefersReducedMotion = useReducedMotion();
   const [collapsed, setCollapsed] = useState(false);
@@ -118,25 +120,19 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {navItems.map((item) => {
           const isActive = pathname === item.href;
-          return (
-            <button
-              key={item.href}
-              onClick={() => handleNavClick(item.href, item.comingSoon)}
-              type="button"
-              aria-label={collapsed ? `${item.label}${item.comingSoon ? ' (coming soon)' : ''}` : undefined}
-              aria-current={isActive ? 'page' : undefined}
-              aria-disabled={item.comingSoon || undefined}
-              className={`
-                w-full flex items-center gap-3 px-3 py-2.5 rounded-xl
-                transition-colors duration-200
-                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
-                ${isActive
-                  ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                }
-                ${collapsed ? 'justify-center' : ''}
-              `}
-            >
+          const baseClasses = `
+            w-full flex items-center gap-3 px-3 py-2.5 rounded-xl
+            transition-colors duration-200
+            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
+            ${isActive
+              ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            }
+            ${collapsed ? 'justify-center' : ''}
+          `;
+
+          const inner = (
+            <>
               <span aria-hidden="true" className={isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500'}>
                 {item.icon}
               </span>
@@ -153,7 +149,38 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
                   Soon
                 </span>
               )}
-            </button>
+            </>
+          );
+
+          // "Coming soon" items are non-navigable inert buttons.
+          if (item.comingSoon) {
+            return (
+              <button
+                key={item.href}
+                type="button"
+                onClick={() => handleNavClick(item.href, item.comingSoon)}
+                aria-label={collapsed ? `${item.label} (coming soon)` : undefined}
+                aria-disabled="true"
+                className={baseClasses}
+              >
+                {inner}
+              </button>
+            );
+          }
+
+          // Preserve the selected entity across tab switches.
+          const href = entityId ? `${item.href}?entity_id=${entityId}` : item.href;
+          return (
+            <Link
+              key={item.href}
+              href={href}
+              onClick={() => handleNavClick(item.href, item.comingSoon)}
+              aria-label={collapsed ? item.label : undefined}
+              aria-current={isActive ? 'page' : undefined}
+              className={baseClasses}
+            >
+              {inner}
+            </Link>
           );
         })}
       </nav>

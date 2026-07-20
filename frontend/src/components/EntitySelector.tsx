@@ -1,14 +1,16 @@
 'use client';
 
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 export default function EntitySelector({ entities }: { entities: any[] }) {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentEntityId = searchParams.get('entity_id') || entities[0]?.id;
 
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    router.push(`/?entity_id=${e.target.value}`);
+    // Stay on the current tab; only swap the entity_id query param.
+    router.push(`${pathname}?entity_id=${e.target.value}`);
   };
 
   return (

@@ -1,43 +1,74 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { AlertCircle, Loader2 } from 'lucide-react';
 
-// Layout Components
-import Sidebar from '../components/layout/Sidebar';
-import TopNavbar from '../components/layout/TopNavbar';
-
-// Standard Dashboard Components
-import HeroSection from '../components/dashboard/HeroSection';
-import KPICards from '../components/dashboard/KPICards';
-import RiskGauge from '../components/dashboard/RiskGauge';
-import AIInsights from '../components/dashboard/AIInsights';
-import RecommendationCenter from '../components/dashboard/RecommendationCenter';
-import MentionFeed from '../components/dashboard/MentionFeed';
-import AlertCenter from '../components/dashboard/AlertCenter';
-import SentimentChart from '../components/SentimentChart';
-import CategoryHeatmap from '../components/CategoryHeatmap';
-import Card from '../components/ui/Card';
-import CreateEntityForm from '../components/CreateEntityForm';
-import EntitySelector from '../components/EntitySelector';
-import CompetitorComparisonMatrix from '../components/dashboard/CompetitorComparisonMatrix';
-
-export default function Page() {
-  return (
-    <Suspense fallback={
-      <div role="status" aria-live="polite" className="flex items-center justify-center h-screen bg-slate-50 dark:bg-slate-900">
-        <Loader2 aria-hidden="true" className="w-8 h-8 animate-spin text-blue-500" />
-        <span className="sr-only">Loading…</span>
-      </div>
-    }>
-      <Dashboard />
-    </Suspense>
-  );
+interface Alert {
+  id: string;
+  title: string;
+  source: string;
+  risk: 'critical' | 'high' | 'medium' | 'low';
+  timestamp: string;
 }
 
-function Dashboard() {
+interface DashboardContextValue {
+  // Status
+  loading: boolean;
+  loadingMessage: string;
+  error: string | null;
+
+  // Identity
+  displayName: string;
+  displayEmail: string;
+  userToken: string;
+
+  // Data
+  allEntities: any[];
+  currentEntity: any;
+  currentEntityName: string;
+  competitorsData: any[];
+  mentions: any[];
+  recommendation: any;
+  riskScoreData: any;
+  finalRiskScore: number;
+  previousRiskScore: number | null;
+
+  // Derived
+  positive: number;
+  neutral: number;
+  negative: number;
+  trendDelta: number | null;
+  categoryBreakdown: Record<string, number>;
+  alerts: Alert[];
+  rootCauseSummary: string;
+
+  // Theme
+  theme: 'light' | 'dark';
+  toggleTheme: () => void;
+}
+
+const DashboardContext = createContext<DashboardContextValue | null>(null);
+
+export function useDashboard(): DashboardContextValue {
+  const ctx = useContext(DashboardContext);
+  if (!ctx) {
+    throw new Error('useDashboard must be used within a DashboardProvider');
+  }
+  return ctx;
+}
+
+export default function DashboardProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const entityIdParam = searchParams.get('entity_id');
@@ -62,9 +93,7 @@ function Dashboard() {
   const [recommendation, setRecommendation] = useState<any>(null);
   const [riskScoreData, setRiskScoreData] = useState<any>(null);
 
-  // UI State
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
+  // Theme
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
   useEffect(() => {
@@ -80,16 +109,6 @@ function Dashboard() {
     document.documentElement.classList.toggle('dark', newTheme === 'dark');
     if (typeof window !== 'undefined') localStorage.setItem('theme', newTheme);
   };
-
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 1024);
-      if (window.innerWidth >= 1024) setSidebarOpen(false);
-    };
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
 
   // ─── POLLING & DATA FETCHING ENGINE ───
   useEffect(() => {
@@ -162,7 +181,7 @@ function Dashboard() {
         const checkDataReady = async () => {
           if (!isMounted) return;
           pollCount++;
-          
+
           // Cycle through loading messages to keep user engaged
           if (pollCount < loadingMessages.length) {
             setLoadingMessage(loadingMessages[pollCount]);
@@ -235,62 +254,13 @@ function Dashboard() {
     }
 
     loadData();
-    return () => { 
-      isMounted = false; 
+    return () => {
+      isMounted = false;
       clearTimeout(pollInterval);
     };
   }, [entityIdParam, router]);
 
-  // ─── RENDERING STATES ───
-
-  if (loading && !error) {
-    return (
-      <div role="status" aria-live="polite" className="flex flex-col items-center justify-center h-screen gap-4 bg-slate-50 dark:bg-slate-900 transition-colors">
-        <Loader2 aria-hidden="true" className="w-10 h-10 animate-spin text-black dark:text-white" />
-        <div className="flex flex-col items-center space-y-1 text-center">
-          <p className="text-sm font-semibold text-slate-900 dark:text-white animate-pulse">
-            {loadingMessage}
-          </p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Fetching real-time web context and analyzing sentiment…
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-screen p-8 bg-slate-50 dark:bg-slate-900">
-        <div role="alert" className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 rounded-2xl p-6 max-w-md text-center">
-          <AlertCircle aria-hidden="true" className="w-8 h-8 text-red-500 mx-auto mb-3" />
-          <p className="text-red-700 dark:text-red-400 font-medium text-sm">{error}</p>
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            className="mt-4 text-xs font-semibold text-red-600 dark:text-red-400 underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 rounded"
-          >
-            Force Refresh
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (allEntities.length === 0) {
-    return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-8 flex flex-col items-center justify-center">
-        <div className="max-w-2xl w-full space-y-6">
-          <div className="text-center space-y-2 mb-8">
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Initialize SentiWatch</h1>
-            <p className="text-slate-500 dark:text-slate-400 text-sm">Create your first tracking entity to deploy the monitoring agents.</p>
-          </div>
-          
-          <CreateEntityForm userToken={userToken} />
-        </div>
-      </div>
-    );
-  }
+  // ─── DERIVED VALUES ───
 
   // Calculate Sentiment Stats
   let positive = 0, neutral = 0, negative = 0;
@@ -313,7 +283,7 @@ function Dashboard() {
     riskScoreData?.category_breakdown || {};
 
   // Real alerts: high-severity negative mentions, most severe first.
-  const alerts = mentions
+  const alerts: Alert[] = mentions
     .filter((m) => {
       const s = m.sentiment_results?.[0];
       return s?.label === 'negative' && (s?.severity || 0) >= 8;
@@ -339,77 +309,56 @@ function Dashboard() {
       };
     });
 
+  const value = useMemo<DashboardContextValue>(
+    () => ({
+      loading,
+      loadingMessage,
+      error,
+      displayName,
+      displayEmail,
+      userToken,
+      allEntities,
+      currentEntity,
+      currentEntityName,
+      competitorsData,
+      mentions,
+      recommendation,
+      riskScoreData,
+      finalRiskScore,
+      previousRiskScore,
+      positive,
+      neutral,
+      negative,
+      trendDelta,
+      categoryBreakdown,
+      alerts,
+      rootCauseSummary,
+      theme,
+      toggleTheme,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      loading,
+      loadingMessage,
+      error,
+      displayName,
+      displayEmail,
+      userToken,
+      allEntities,
+      currentEntity,
+      competitorsData,
+      mentions,
+      recommendation,
+      riskScoreData,
+      finalRiskScore,
+      previousRiskScore,
+      theme,
+    ]
+  );
+
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 transition-colors duration-200">
-      <Sidebar
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        isMobile={isMobile}
-        userName={displayName}
-        userEmail={displayEmail}
-      />
-
-      <div className={`transition-[margin] duration-300 ${isMobile ? 'lg:ml-0' : 'lg:ml-64'}`}>
-        <TopNavbar
-          onMenuClick={() => setSidebarOpen(!sidebarOpen)}
-          theme={theme}
-          onThemeToggle={toggleTheme}
-          entityName={currentEntityName}
-          userName={displayName}
-          userEmail={displayEmail}
-        />
-
-        <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8 space-y-6 md:space-y-8">
-
-          {/* ── Zone 1: Overview ── */}
-          <HeroSection userName={displayName} riskScore={finalRiskScore} trend={trendDelta} />
-
-          <KPICards totalMentions={mentions.length} negative={negative} positive={positive} />
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Card hover={false} className="flex flex-col items-center justify-center py-6">
-              <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">Live Risk Index</h3>
-              <RiskGauge score={finalRiskScore} />
-            </Card>
-            <AIInsights rootCauseSummary={rootCauseSummary} negativeCount={negative} positiveCount={positive} totalMentions={mentions.length} />
-          </div>
-
-          {/* ── Zone 2: Insights ── */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card hover={false}>
-              <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">Sentiment Breakdown</h3>
-              <SentimentChart positive={positive} neutral={neutral} negative={negative} />
-            </Card>
-            <Card hover={false}>
-              <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">Category Breakdown</h3>
-              <CategoryHeatmap breakdown={categoryBreakdown} />
-            </Card>
-          </div>
-
-          {/* ── Zone 3: Actions ── */}
-          <RecommendationCenter recommendation={recommendation} score={finalRiskScore} />
-
-          <AlertCenter alerts={alerts} />
-
-          {competitorsData.length > 0 && (
-            <CompetitorComparisonMatrix primaryEntity={currentEntity} competitors={competitorsData} />
-          )}
-
-          {/* ── Zone 4: Activity ── */}
-          <MentionFeed mentions={mentions} />
-
-          {/* ── Zone 5: Manage Entities ── */}
-          <section className="pt-2">
-            <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-              <h2 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Manage Entities</h2>
-              <Card hover={false} className="p-3">
-                <EntitySelector entities={allEntities} />
-              </Card>
-            </div>
-            <CreateEntityForm userToken={userToken} />
-          </section>
-        </main>
-      </div>
-    </div>
+    <DashboardContext.Provider value={value}>
+      {children}
+    </DashboardContext.Provider>
   );
 }
