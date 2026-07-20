@@ -11,6 +11,7 @@ interface Competitor {
     score: number;
     negative_mentions: number;
     category_breakdown: Record<string, number>;
+    created_at?: string;
   }>;
 }
 
@@ -19,10 +20,11 @@ interface CompetitorMatrixProps {
     id: string;
     name: string;
   };
+  primaryRiskScore: number;
   competitors: Competitor[];
 }
 
-export default function CompetitorComparisonMatrix({ primaryEntity, competitors }: CompetitorMatrixProps) {
+export default function CompetitorComparisonMatrix({ primaryEntity, primaryRiskScore, competitors }: CompetitorMatrixProps) {
   
   // Quick analyzer to pull out worst-performing categories for competitors
   const getVulnerability = (breakdown: Record<string, number> | undefined) => {
@@ -78,8 +80,12 @@ export default function CompetitorComparisonMatrix({ primaryEntity, competitors 
                 <span>{primaryEntity.name} <span className="text-2xs text-blue-500 font-normal border border-blue-200 px-1.5 py-0.5 rounded ml-1">You</span></span>
               </td>
               <td className="p-4 text-center">
-                <span className="font-mono bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded text-xs font-semibold">
-                  Pending Base
+                <span className={`font-mono text-xs font-bold px-2.5 py-1 rounded-md ${
+                  primaryRiskScore >= 60
+                    ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/20 dark:text-rose-400'
+                    : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/20 dark:text-emerald-400'
+                }`}>
+                  {primaryRiskScore}/100
                 </span>
               </td>
               <td className="p-4 text-center text-slate-500">—</td>
@@ -89,7 +95,12 @@ export default function CompetitorComparisonMatrix({ primaryEntity, competitors 
 
             {/* Competitor Data Extraction Loop */}
             {competitors.map((comp) => {
-              const latestRisk = comp.risk_scores?.[0];
+              // risk_scores comes back unordered; pick the most recent so the
+              // matrix reflects the latest analysis rather than an arbitrary row.
+              const latestRisk = [...(comp.risk_scores ?? [])].sort(
+                (a, b) =>
+                  new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
+              )[0];
               const score = latestRisk?.score || 0;
               const vulnerability = getVulnerability(latestRisk?.category_breakdown);
 

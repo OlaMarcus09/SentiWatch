@@ -51,6 +51,10 @@ class BrandCreateRequest(BaseModel):
     profile_type: str = "business"  # e.g., student, influencer, business, real_estate
     competitors: Optional[List[str]] = []  # Array of competitor names to track
 
+
+class CompetitorAddRequest(BaseModel):
+    name: str  # Competitor name to link to an existing entity
+
 # =========================================================
 # AUTH DEPENDENCIES
 # =========================================================
@@ -264,3 +268,65 @@ async def create_new_entity(
     background_tasks.add_task(run_analysis_pipeline, entity_id, payload.name, payload.profile_type)
 
     return {"success": True, "entity_id": entity_id}
+
+
+@app.post("/entities/{entity_id}/competitors")
+async def add_competitor(
+    entity_id: str,
+    payload: CompetitorAddRequest,
+    background_tasks: BackgroundTasks,
+    user = Depends(verify_user),
+):
+    """
+    Links a new competitor to an existing entity owned by the caller.
+    Mirrors the competitor-creation loop used at entity-create time.
+    """
+    comp_name = payload.name.strip()
+    if not comp_name:
+        raise HTTPException(status_code=400, detail="Competitor name cannot be empty")
+
+    user_id = user.id
+
+    # Verify the primary entity exists and belongs to the caller. supabase_admin
+    # bypasses RLS, so we must enforce ownership here or a user could attach
+    # competitors to another tenant's entity.
+    try:
+        primary = supabase_admin.table("monitored_entities") \
+            .select("id, profile_type, user_id") \
+            .eq("id", entity_id) \
+            .maybe_single() \
+            .execute()
+    except Exception as e:
+        logging.error("Entity lookup failed for %s: %s", entity_id, str(e))
+        raise HTTPException(status_code=500, detail="Could not look up entity")
+
+    primary_entity = getattr(primary, "data", None)
+    if not primary_entity or primary_entity["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    profile_type = primary_entity["profile_type"]
+
+    try:
+        # Create the competitor entity owned by the same user so RLS scopes it
+        # correctly (no orphaned null-owner rows).
+        comp_insert = supabase_admin.table("monitored_entities").insert({
+            "name": comp_name,
+            "profile_type": profile_type,
+            "user_id": user_id,
+        }).execute()
+
+        comp_id = comp_insert.data[0]["id"]
+
+        # Link the primary entity to this competitor.
+        supabase_admin.table("competitor_links").insert({
+            "primary_entity_id": entity_id,
+            "competitor_entity_id": comp_id,
+        }).execute()
+
+        # Kick off analysis for the new competitor in the background.
+        background_tasks.add_task(run_analysis_pipeline, comp_id, comp_name, profile_type)
+    except Exception as e:
+        logging.error("Failed to add competitor %s to %s: %s", comp_name, entity_id, str(e))
+        raise HTTPException(status_code=500, detail="Could not add competitor")
+
+    return {"success": True, "competitor_entity_id": comp_id}
