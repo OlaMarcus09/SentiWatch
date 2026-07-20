@@ -36,7 +36,7 @@ SentiWatch has two classes of endpoints, each with its own auth mechanism.
 These are secrets and must **never** be committed. `.env` / `.env.local` are
 gitignored and confirmed untracked.
 
-### `backend/.env` (and Railway env + cron env)
+### `backend/.env` (and Render env + cron env)
 | Key | Purpose |
 |-----|---------|
 | `SUPABASE_URL` | Supabase project URL |
@@ -55,7 +55,7 @@ python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 Add the same value to:
 1. `backend/.env` (local)
-2. Railway service environment (the API)
+2. Render service environment (the API)
 3. The cron job's environment (so `cron_sync.py` can send the header)
 
 If these three don't match, the cron pipeline gets `401` and the internal

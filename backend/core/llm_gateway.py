@@ -11,7 +11,7 @@ class LLMProvider(ABC):
 
 class GroqAdapter(LLMProvider):
     def __init__(self):
-        # Requires GROQ_API_KEY in your Railway environment
+        # Requires GROQ_API_KEY in your Render environment
         self.client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
         self.model = "llama-3.3-70b-versatile"
 
