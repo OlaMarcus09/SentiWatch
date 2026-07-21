@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 from typing import Dict, Any
 
@@ -40,6 +41,16 @@ Schema:
     "reason": "Short sentence explaining the decision."
 }
 
+NEGATIVE SIGNAL CATEGORIES (treat ALL of these as negative, even with no legal/regulatory keywords):
+- Money taken, not refunded, or "no refund" / "no delivery" outcomes
+- Property, land, investment, or contract disputes where the customer got nothing
+- Any headline where a company "took", "collected", or "received" money and failed to deliver a service/product/asset
+- Allegations of bribery, corruption, embezzlement, racketeering, money laundering, tax evasion, or trafficking (drug, arms, pharma) — even if unproven or reported by a third party
+- Theft, robbery, or unauthorized use of customer funds/assets
+- Years-long unresolved complaints ("X years later", "still no response", "still waiting")
+- Court cases, petitions, or investigative journalism pieces framed around a wronged customer, even without words like "fraud" or "scam"
+- Any story where the entity is the one accused of withholding value from another party
+
 Examples:
 
 1. "Thanks to Cowrywise for saving me from a losing streak in trading!"
@@ -57,12 +68,19 @@ Examples:
 5. "Huge queues at this branch in Lekki. Very disappointing service speed."
    → {"sentiment":"negative","category":"customer_complaint","sub_category":"service_speed","severity":7,"confidence":0.92,"risk":"medium","root_cause":"Slow service causing customer dissatisfaction","reason":"Customer complaint about service speed"}
 
+6. "PWAN Homes Took Couple's N12m. No Land, No Refund 3 Years Later"
+   → {"sentiment":"negative","category":"fraud","sub_category":"fraud_allegation","severity":9,"confidence":0.95,"risk":"critical","root_cause":"Company took payment, delivered no land or refund for years","reason":"Unresolved financial harm to a customer is a severe trust violation even without legal keywords"}
+
+7. "Investigation exposes company's alleged links to embezzlement and shell payments"
+   → {"sentiment":"negative","category":"fraud","sub_category":"fraud_allegation","severity":9,"confidence":0.9,"risk":"critical","root_cause":"Alleged embezzlement and financial misconduct","reason":"Financial crime allegation regardless of formal charges"}
+
 Rules:
-- If text contains fraud, EFCC, police, court, or scandals → category=fraud or regulatory, risk=critical/high
+- If text contains fraud, EFCC, police, court, bribery, corruption, embezzlement, money laundering, trafficking, or racketeering → category=fraud or regulatory, risk=critical/high
+- If text describes money/value taken with no delivery, refund, or resolution → category=fraud (or customer_complaint if smaller-scale), risk=high/critical, sentiment=negative — regardless of whether "fraud/scam" is explicitly stated
 - If text is a customer compliment → category=customer_praise, risk=low
-- If text is a customer complaint → category=customer_complaint or product_quality
+- If text is a customer complaint without financial loss → category=customer_complaint or product_quality
 - If text is about regulations, CBN, NAFDAC → category=regulatory
-- If uncertain between negative and neutral, bias towards NEGATIVE
+- If uncertain between negative and neutral, bias towards NEGATIVE — silence on outcome (e.g. no refund given, no resolution stated) is itself a negative signal
 - Keep root_cause under 10 words
 - Be precise. Return ONLY JSON.
 """
@@ -77,7 +95,59 @@ VALID_SUB_CATEGORIES = {
 }
 
 
-def validate_ai_output(result: Dict[str, Any]) -> Dict[str, Any]:
+# ---------------------------------------------------------------------------
+# Deterministic negative-signal backstop
+# ---------------------------------------------------------------------------
+# The LLM occasionally under-calls clear financial-harm / crime stories as
+# "neutral" (e.g. "PWAN Homes Took Couple's N12m. No Land, No Refund 3 Years
+# Later"). Since scoring treats neutral as ZERO risk, one such miss makes a
+# critical story invisible. These patterns act as a hard safety net: if the
+# raw text matches, we refuse to let the mention stay neutral regardless of
+# what the model returned.
+
+# Each entry: (compiled regex, severity_floor, risk_floor)
+_NEGATIVE_SIGNAL_PATTERNS = [
+    # Money taken / no delivery / no refund outcomes
+    (re.compile(r"\bno\s+refund\b", re.I), 8, "high"),
+    (re.compile(r"\bno\s+(?:land|delivery|product|service|response|resolution)\b", re.I), 8, "high"),
+    (re.compile(r"\b(?:took|collected|received|paid|deposited)\b.{0,40}\b(?:but|yet|however|still)?\b.{0,40}\b(?:no\s|never|failed|nothing)", re.I), 8, "high"),
+    (re.compile(r"\bstill\s+(?:waiting|no\s+(?:refund|response|land|delivery))\b", re.I), 8, "high"),
+    (re.compile(r"\b\d+\s+years?\s+later\b", re.I), 7, "high"),
+    # Financial-crime allegations (even if unproven / third-party reported)
+    (re.compile(r"\b(?:fraud|scam|scammed|defraud(?:ed)?|ponzi)\b", re.I), 9, "critical"),
+    (re.compile(r"\b(?:bribery|bribe[ds]?|corrupt(?:ion)?)\b", re.I), 9, "critical"),
+    (re.compile(r"\b(?:embezzle(?:ment|d)?|misappropriat)", re.I), 9, "critical"),
+    (re.compile(r"\bmoney\s+launder", re.I), 9, "critical"),
+    (re.compile(r"\b(?:racketeer|extortion)", re.I), 9, "critical"),
+    (re.compile(r"\btax\s+(?:evasion|fraud)\b", re.I), 8, "high"),
+    (re.compile(r"\b(?:drug|arms|pharma(?:ceutical)?|human)\s+traffick", re.I), 9, "critical"),
+    (re.compile(r"\b(?:theft|robbery|stole|stolen|looted)\b", re.I), 8, "high"),
+    # Legal / enforcement framing
+    (re.compile(r"\b(?:EFCC|ICPC|arraign|indict|petition|lawsuit|sued|court\s+case)\b", re.I), 8, "high"),
+]
+
+
+def detect_forced_negative(text: str):
+    """
+    Scan raw mention text for hard negative signals the LLM must never bury as
+    neutral. Returns (severity_floor, risk_floor) for the strongest match, or
+    None if no signal is present.
+    """
+    if not text:
+        return None
+
+    best = None  # (severity_floor, risk_floor)
+    for pattern, sev_floor, risk_floor in _NEGATIVE_SIGNAL_PATTERNS:
+        if pattern.search(text):
+            if best is None or sev_floor > best[0]:
+                best = (sev_floor, risk_floor)
+    return best
+
+
+_RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def validate_ai_output(result: Dict[str, Any], text: str = "") -> Dict[str, Any]:
 
     raw_sentiment = str(result.get("sentiment", "neutral")).lower().strip()
     raw_risk = str(result.get("risk", "low")).lower().strip()
@@ -103,7 +173,34 @@ def validate_ai_output(result: Dict[str, Any]) -> Dict[str, Any]:
 
     result["root_cause"] = str(result.get("root_cause", "No root cause identified")).strip()[:100]
     result["reason"] = str(result.get("reason", "No reason provided")).strip()
-    
+
+    # Deterministic backstop: never let a hard negative signal sit as neutral
+    # (or as a low-severity/low-risk negative). Scoring treats neutral as ZERO,
+    # so this guarantees financial-harm / crime stories always move the score.
+    forced = detect_forced_negative(text)
+    if forced:
+        sev_floor, risk_floor = forced
+
+        if result["sentiment"] != "negative":
+            logging.warning(
+                "Backstop override: LLM said '%s' but text matched a hard "
+                "negative signal — forcing negative. Text: %.80s",
+                result["sentiment"], text,
+            )
+            result["sentiment"] = "negative"
+            result["reason"] = (
+                f"[Auto-flagged] {result['reason']} "
+                f"(rule: hard negative signal detected in text)"
+            ).strip()
+            # A general/praise category no longer fits a forced negative.
+            if result["category"] in ("general", "customer_praise"):
+                result["category"] = "fraud"
+
+        # Raise severity/risk to at least the matched floor.
+        result["severity"] = max(result["severity"], sev_floor)
+        if _RISK_ORDER.get(result["risk"], 0) < _RISK_ORDER[risk_floor]:
+            result["risk"] = risk_floor
+
     return result
 
 
@@ -327,7 +424,7 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, l
                 
                 # Pass the raw web data directly to Groq using your robust engine
                 ai_result = call_groq(live_context[:2000]) # Cap text to prevent token blowing
-                ai_result = validate_ai_output(ai_result)
+                ai_result = validate_ai_output(ai_result, live_context[:2000])
                 
                 # Save it to sentiment_results using your built-in saver
                 save_sentiment(live_mention_id, ai_result)
@@ -357,7 +454,7 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, l
 
         try:
             ai_result = call_groq(text)
-            ai_result = validate_ai_output(ai_result)
+            ai_result = validate_ai_output(ai_result, text)
             save_sentiment(mention_id, ai_result)
             logging.info(
                 f"Mention {mention_id} → "
