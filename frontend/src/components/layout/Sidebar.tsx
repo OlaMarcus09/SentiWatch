@@ -32,11 +32,10 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" />, href: '/' },
-  { label: 'Monitoring', icon: <Radar className="w-5 h-5" />, href: '/monitoring' },
+  { label: 'Insights', icon: <Radar className="w-5 h-5" />, href: '/insights' },
   { label: 'Alerts', icon: <Bell className="w-5 h-5" />, href: '/alerts' },
   { label: 'Reports', icon: <FileText className="w-5 h-5" />, href: '/reports', comingSoon: true },
   { label: 'Recommendations', icon: <Lightbulb className="w-5 h-5" />, href: '/recommendations' },
-  { label: 'Competitors', icon: <Users className="w-5 h-5" />, href: '/competitors' },
   { label: 'Integrations', icon: <Puzzle className="w-5 h-5" />, href: '/integrations', comingSoon: true },
   { label: 'Billing', icon: <CreditCard className="w-5 h-5" />, href: '/billing', comingSoon: true },
   { label: 'Settings', icon: <Settings className="w-5 h-5" />, href: '/settings' },
@@ -102,6 +101,16 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
             className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           >
             <ChevronLeft aria-hidden="true" className="w-4 h-4 text-slate-400" />
+          </button>
+        )}
+        {!isMobile && collapsed && (
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            aria-label="Expand sidebar"
+            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          >
+            <ChevronRight aria-hidden="true" className="w-4 h-4 text-slate-400" />
           </button>
         )}
         {isMobile && (

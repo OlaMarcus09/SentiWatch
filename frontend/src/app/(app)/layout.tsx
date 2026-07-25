@@ -134,6 +134,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
           theme={theme}
           onThemeToggle={toggleTheme}
           entityName={currentEntityName}
+          entities={allEntities}
           userName={displayName}
           userEmail={displayEmail}
         />

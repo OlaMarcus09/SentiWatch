@@ -14,21 +14,17 @@ export default function EntitySelector({ entities }: { entities: any[] }) {
   };
 
   return (
-    <div className="flex flex-col">
-      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
-        Monitored Business
-      </label>
-      <select
-        value={currentEntityId}
-        onChange={handleChange}
-        className="block w-56 bg-slate-800 text-white border border-slate-700 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer"
-      >
-        {entities.map((ent) => (
-          <option key={ent.id} value={ent.id} className="bg-slate-900 text-white">
-            {ent.name}
-          </option>
-        ))}
-      </select>
-    </div>
+    <select
+      value={currentEntityId}
+      onChange={handleChange}
+      aria-label="Switch monitored entity"
+      className="block w-48 bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-white border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 transition-all cursor-pointer"
+    >
+      {entities.map((ent) => (
+        <option key={ent.id} value={ent.id}>
+          {ent.name}
+        </option>
+      ))}
+    </select>
   );
 }

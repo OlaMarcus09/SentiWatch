@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, useReducedMotion } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
+import EntitySelector from '@/components/EntitySelector';
 import {
   Search,
   Bell,
@@ -21,6 +22,7 @@ interface TopNavbarProps {
   theme: 'light' | 'dark';
   onThemeToggle: () => void;
   entityName: string;
+  entities: any[];
   userName?: string;
   userEmail?: string;
 }
@@ -30,6 +32,7 @@ export default function TopNavbar({
   theme,
   onThemeToggle,
   entityName,
+  entities,
   userName,
   userEmail,
 }: TopNavbarProps) {
@@ -75,7 +78,7 @@ export default function TopNavbar({
   return (
     <header className="sticky top-0 z-30 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200/60 dark:border-slate-800/60">
       <div className="flex items-center justify-between h-16 px-4 md:px-6">
-        {/* Left: Menu + Title */}
+        {/* Left: Menu + Title + Entity Switcher */}
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -90,9 +93,13 @@ export default function TopNavbar({
               Dashboard
             </h2>
             <span className="text-slate-300 dark:text-slate-600">/</span>
-            <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-              {entityName || 'Overview'}
-            </span>
+            {entities.length > 1 ? (
+              <EntitySelector entities={entities} />
+            ) : (
+              <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                {entityName || 'Overview'}
+              </span>
+            )}
           </div>
         </div>
 

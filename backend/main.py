@@ -49,6 +49,7 @@ class BrandCreateRequest(BaseModel):
     name: str
     # New Pivot Fields
     profile_type: str = "business"  # e.g., student, influencer, business, real_estate
+    social_handle: Optional[str] = None  # e.g., @gtbank
     competitors: Optional[List[str]] = []  # Array of competitor names to track
 
 
@@ -221,11 +222,15 @@ async def create_new_entity(
 
     # 3. Insert primary entity with the new profile_type
     try:
-        insert_response = supabase_admin.table("monitored_entities").insert({
+        insert_payload = {
             "name": payload.name,
             "user_id": user_id,
-            "profile_type": payload.profile_type
-        }).execute()
+            "profile_type": payload.profile_type,
+        }
+        if payload.social_handle:
+            insert_payload["social_handle"] = payload.social_handle
+
+        insert_response = supabase_admin.table("monitored_entities").insert(insert_payload).execute()
     except Exception as e:
         logging.error("Entity insert failed for user %s: %s", user_id, str(e))
         raise HTTPException(status_code=500, detail="Could not create entity")

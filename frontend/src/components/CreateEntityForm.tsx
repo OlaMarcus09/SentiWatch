@@ -6,19 +6,12 @@ import { useRouter } from 'next/navigation';
 export default function CreateEntityForm({ userToken }: { userToken: string }) {
   const router = useRouter();
   const [name, setName] = useState('');
-  const [profileType, setProfileType] = useState('business');
+  const [socialHandle, setSocialHandle] = useState('');
   const [competitorInput, setCompetitorInput] = useState('');
   const [competitors, setCompetitors] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
-
-  const personas = [
-    { id: 'business', label: 'Business / Brand', icon: '🏢' },
-    { id: 'student', label: 'Student / Visa Applicant', icon: '🎓' },
-    { id: 'influencer', label: 'Creator / Influencer', icon: '✨' },
-    { id: 'real_estate', label: 'Real Estate Manager', icon: '🏗️' },
-  ];
 
   const handleAddCompetitor = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && competitorInput.trim() !== '') {
@@ -57,7 +50,7 @@ export default function CreateEntityForm({ userToken }: { userToken: string }) {
         },
         body: JSON.stringify({
           name,
-          profile_type: profileType,
+          social_handle: socialHandle || undefined,
           competitors,
         }),
       });
@@ -97,34 +90,22 @@ export default function CreateEntityForm({ userToken }: { userToken: string }) {
         />
       </div>
 
-      {/* 2. Persona Selection (accessible radio group) */}
-      <fieldset className="space-y-3">
-        <legend className="text-sm font-medium text-gray-900 dark:text-slate-100">Select Profile Context</legend>
-        <div role="radiogroup" aria-label="Profile context" className="grid grid-cols-2 gap-3">
-          {personas.map((p) => {
-            const selected = profileType === p.id;
-            return (
-              <button
-                key={p.id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setProfileType(p.id)}
-                className={`text-left cursor-pointer p-4 rounded-xl border flex items-center space-x-3 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-blue-500 ${
-                  selected
-                    ? 'border-black dark:border-blue-500 bg-gray-50/50 dark:bg-slate-700/50 shadow-sm'
-                    : 'border-gray-100 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500'
-                }`}
-              >
-                <span aria-hidden="true" className="text-xl">{p.icon}</span>
-                <span className={`text-sm font-medium ${selected ? 'text-black dark:text-white' : 'text-gray-600 dark:text-slate-300'}`}>
-                  {p.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </fieldset>
+      {/* 2. Social Handle */}
+      <div className="space-y-2">
+        <label htmlFor="social-handle" className="text-sm font-medium text-gray-900 dark:text-slate-100">Social Handle</label>
+        <input
+          id="social-handle"
+          name="social-handle"
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          value={socialHandle}
+          onChange={(e) => setSocialHandle(e.target.value)}
+          placeholder="@gtbank"
+          className="w-full px-4 py-3 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-gray-900 dark:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-black dark:focus-visible:ring-blue-500 focus:border-transparent transition-colors placeholder:text-gray-400 dark:placeholder:text-slate-500"
+        />
+        <p className="text-xs text-gray-500 dark:text-slate-400">Optional, but highly recommended for the most accurate scraping results.</p>
+      </div>
 
       {/* 3. Competitor Tags */}
       <div className="space-y-2">

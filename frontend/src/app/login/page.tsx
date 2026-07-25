@@ -35,6 +35,7 @@ export default function LoginPage() {
           appearance={{ theme: ThemeSupa }}
           providers={['google']} // You can add 'github' etc. later
           theme="light"
+          redirectTo="https://senti-watch.vercel.app/auth/callback"
         />
       </div>
     </div>
