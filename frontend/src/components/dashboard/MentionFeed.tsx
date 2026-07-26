@@ -98,14 +98,10 @@ export default function MentionFeed({ mentions }: MentionFeedProps) {
                         minute: '2-digit',
                       })}
                     </span>
-                    {category !== 'general' && (
-                      <>
-                        <span className="text-slate-300 dark:text-slate-600">•</span>
-                        <span className="text-xs text-slate-500 dark:text-slate-400 capitalize">
-                          {category.replace(/_/g, ' ')}
-                        </span>
-                      </>
-                    )}
+                    <span className="text-slate-300 dark:text-slate-600">•</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400 capitalize bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                      {category.replace(/_/g, ' ')}
+                    </span>
                     {severity > 0 && (
                       <>
                         <span className="text-slate-300 dark:text-slate-600">•</span>

@@ -10,19 +10,20 @@ interface AIInsightsProps {
   negativeCount: number;
   positiveCount: number;
   totalMentions: number;
+  bare?: boolean;
 }
 
-export default function AIInsights({ 
-  rootCauseSummary, 
-  negativeCount, 
-  positiveCount, 
-  totalMentions 
+export default function AIInsights({
+  rootCauseSummary,
+  negativeCount,
+  positiveCount,
+  totalMentions,
+  bare = false,
 }: AIInsightsProps) {
   const summary = rootCauseSummary || 'No significant reputation signals detected.';
   const hasNegative = negativeCount > 0;
 
-  return (
-    <Card className="bg-gradient-to-br from-blue-50/80 to-indigo-50/80 dark:from-blue-900/20 dark:to-indigo-900/20 border-blue-200/40 dark:border-blue-800/30">
+  const content = (
       <div className="flex items-start gap-4">
         <div className="p-3 rounded-xl bg-blue-600/10 dark:bg-blue-500/20">
           <Sparkles className="w-6 h-6 text-blue-600 dark:text-blue-400" />
@@ -79,6 +80,13 @@ export default function AIInsights({
           )}
         </div>
       </div>
+  );
+
+  if (bare) return content;
+
+  return (
+    <Card className="bg-gradient-to-br from-blue-50/80 to-indigo-50/80 dark:from-blue-900/20 dark:to-indigo-900/20 border-blue-200/40 dark:border-blue-800/30">
+      {content}
     </Card>
   );
 }

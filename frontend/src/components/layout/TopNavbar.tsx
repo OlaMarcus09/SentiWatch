@@ -79,15 +79,26 @@ export default function TopNavbar({
     <header className="sticky top-0 z-30 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200/60 dark:border-slate-800/60">
       <div className="flex items-center justify-between h-16 px-4 md:px-6">
         {/* Left: Menu + Title + Entity Switcher */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <button
             type="button"
             onClick={onMenuClick}
             aria-label="Open navigation menu"
-            className="lg:hidden p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            className="lg:hidden p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 flex-shrink-0"
           >
             <Menu aria-hidden="true" className="w-5 h-5 text-slate-600 dark:text-slate-400" />
           </button>
+          {/* Mobile: entity selector only */}
+          {entities.length > 1 ? (
+            <div className="lg:hidden min-w-0 flex-1">
+              <EntitySelector entities={entities} />
+            </div>
+          ) : (
+            <span className="lg:hidden text-sm font-semibold text-slate-800 dark:text-slate-200 truncate">
+              {entityName || 'Overview'}
+            </span>
+          )}
+          {/* Desktop: breadcrumb + entity selector */}
           <div className="hidden lg:flex items-center gap-2">
             <h2 className="text-sm font-medium text-slate-600 dark:text-slate-400">
               Dashboard

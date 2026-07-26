@@ -29,6 +29,7 @@ export default function KPICards({ totalMentions, negative, positive }: KPICards
   const cards = [
     {
       label: 'Total Mentions',
+      subtitle: 'All sources scraped in the last 30 days',
       value: totalMentions,
       icon: Activity,
       color: 'text-blue-600',
@@ -36,6 +37,7 @@ export default function KPICards({ totalMentions, negative, positive }: KPICards
     },
     {
       label: 'Risk Index',
+      subtitle: 'Weighted score based on sentiment, source, and severity',
       value: Math.round((negative / (totalMentions || 1)) * 100),
       icon: AlertTriangle,
       color: 'text-orange-500',
@@ -44,6 +46,7 @@ export default function KPICards({ totalMentions, negative, positive }: KPICards
     },
     {
       label: 'Negative',
+      subtitle: 'Mentions classified as reputationally harmful',
       value: negative,
       icon: ThumbsDown,
       color: 'text-red-600',
@@ -51,6 +54,7 @@ export default function KPICards({ totalMentions, negative, positive }: KPICards
     },
     {
       label: 'Positive',
+      subtitle: 'Mentions classified as trust-building',
       value: positive,
       icon: ThumbsUp,
       color: 'text-green-600',
@@ -77,7 +81,8 @@ export default function KPICards({ totalMentions, negative, positive }: KPICards
               <p className="text-2xl font-bold text-slate-800 dark:text-white">
                 {card.value}{card.suffix || ''}
               </p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{card.label}</p>
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mt-0.5">{card.label}</p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 leading-tight">{card.subtitle}</p>
             </div>
           </Card>
         </motion.div>

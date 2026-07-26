@@ -9,11 +9,8 @@ import {
   LayoutDashboard,
   Radar,
   Bell,
-  FileText,
   Lightbulb,
   Users,
-  Puzzle,
-  CreditCard,
   Settings,
   LogOut,
   ChevronLeft,
@@ -27,17 +24,14 @@ interface NavItem {
   icon: React.ReactNode;
   href: string;
   badge?: number;
-  comingSoon?: boolean;
 }
 
 const navItems: NavItem[] = [
   { label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" />, href: '/' },
   { label: 'Insights', icon: <Radar className="w-5 h-5" />, href: '/insights' },
   { label: 'Alerts', icon: <Bell className="w-5 h-5" />, href: '/alerts' },
-  { label: 'Reports', icon: <FileText className="w-5 h-5" />, href: '/reports', comingSoon: true },
   { label: 'Recommendations', icon: <Lightbulb className="w-5 h-5" />, href: '/recommendations' },
-  { label: 'Integrations', icon: <Puzzle className="w-5 h-5" />, href: '/integrations', comingSoon: true },
-  { label: 'Billing', icon: <CreditCard className="w-5 h-5" />, href: '/billing', comingSoon: true },
+  { label: 'Competitors', icon: <Users className="w-5 h-5" />, href: '/competitors' },
   { label: 'Settings', icon: <Settings className="w-5 h-5" />, href: '/settings' },
 ];
 
@@ -72,10 +66,7 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
       .map((p) => p[0]?.toUpperCase())
       .join('') || '?';
 
-  const handleNavClick = (href: string, comingSoon?: boolean) => {
-    // "Coming soon" items are non-navigable; do nothing rather than
-    // firing a blocking browser alert().
-    if (comingSoon) return;
+  const handleNavClick = (href: string) => {
     if (isMobile) onClose();
   };
 
@@ -153,29 +144,8 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
                   {item.badge}
                 </span>
               )}
-              {!collapsed && item.comingSoon && (
-                <span className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 rounded-full">
-                  Soon
-                </span>
-              )}
             </>
           );
-
-          // "Coming soon" items are non-navigable inert buttons.
-          if (item.comingSoon) {
-            return (
-              <button
-                key={item.href}
-                type="button"
-                onClick={() => handleNavClick(item.href, item.comingSoon)}
-                aria-label={collapsed ? `${item.label} (coming soon)` : undefined}
-                aria-disabled="true"
-                className={baseClasses}
-              >
-                {inner}
-              </button>
-            );
-          }
 
           // Preserve the selected entity across tab switches.
           const href = entityId ? `${item.href}?entity_id=${entityId}` : item.href;
@@ -183,7 +153,7 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
             <Link
               key={item.href}
               href={href}
-              onClick={() => handleNavClick(item.href, item.comingSoon)}
+              onClick={() => handleNavClick(item.href)}
               aria-label={collapsed ? item.label : undefined}
               aria-current={isActive ? 'page' : undefined}
               className={baseClasses}
