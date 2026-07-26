@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useDashboard } from '@/components/providers/DashboardProvider';
@@ -8,9 +8,10 @@ import HeroSection from '@/components/dashboard/HeroSection';
 import KPICards from '@/components/dashboard/KPICards';
 import RiskGauge from '@/components/dashboard/RiskGauge';
 import AIInsights from '@/components/dashboard/AIInsights';
+import CreateEntityForm from '@/components/CreateEntityForm';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
-import { Clock, ArrowRight, Shield } from 'lucide-react';
+import { Clock, ArrowRight, Shield, Plus, ChevronDown } from 'lucide-react';
 
 interface Rec {
   title: string;
@@ -68,7 +69,10 @@ export default function DashboardPage() {
     positive,
     rootCauseSummary,
     recommendation,
+    userToken,
   } = useDashboard();
+
+  const [showAddBrand, setShowAddBrand] = useState(false);
 
   const searchParams = useSearchParams();
   const entityId = searchParams.get('entity_id');
@@ -158,6 +162,32 @@ export default function DashboardPage() {
           </div>
         </div>
       </Card>
+
+      {/* ── Track a New Brand ── */}
+      <div className="mt-6">
+        <button
+          type="button"
+          onClick={() => setShowAddBrand((v) => !v)}
+          className="w-full group flex items-center justify-between p-4 rounded-2xl border border-dashed border-slate-300 dark:border-slate-600 hover:border-blue-400 dark:hover:border-blue-500 bg-slate-50/50 dark:bg-slate-800/30 hover:bg-blue-50/50 dark:hover:bg-blue-900/10 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center group-hover:bg-blue-200 dark:group-hover:bg-blue-900/60 transition-colors">
+              <Plus className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div className="text-left">
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Track a New Brand</p>
+              <p className="text-xs text-slate-400 dark:text-slate-500">Add a brand, social handle, and up to 3 competitors</p>
+            </div>
+          </div>
+          <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${showAddBrand ? 'rotate-180' : ''}`} />
+        </button>
+
+        {showAddBrand && (
+          <div className="mt-4">
+            <CreateEntityForm userToken={userToken} />
+          </div>
+        )}
+      </div>
     </>
   );
 }
