@@ -33,6 +33,15 @@ export default function CreateEntityForm({ userToken }: { userToken: string }) {
     setError(null);
 
     try {
+      // A user may type the last competitor and click submit without pressing
+      // Enter. Treat the pending input as a competitor instead of dropping it.
+      const pendingCompetitor = competitorInput.trim();
+      const submittedCompetitors = pendingCompetitor
+        ? [...competitors, pendingCompetitor]
+            .filter((value, index, values) => values.indexOf(value) === index)
+            .slice(0, 3)
+        : competitors;
+
       // Wake the backend first. On Render's free tier the service sleeps after
       // ~15min idle and takes ~30s to cold-start; pinging root before the POST
       // means the pipeline runs on a warm server instead of racing the wake-up.
@@ -51,7 +60,7 @@ export default function CreateEntityForm({ userToken }: { userToken: string }) {
         body: JSON.stringify({
           name,
           social_handle: socialHandle || undefined,
-          competitors,
+          competitors: submittedCompetitors,
         }),
       });
 

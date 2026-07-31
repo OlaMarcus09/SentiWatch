@@ -381,10 +381,42 @@ def send_email(entity: dict, score: dict) -> bool:
     if score["score"] < EMAIL_ALERT_THRESHOLD:
         return False
 
-    recipient = (
-        entity.get("email")
-        or os.getenv("ALERT_EMAIL_FALLBACK", "onboarding@resend.dev")
-    )
+    # Resolve the owning user's real address and persisted notification choice.
+    # Default-on preserves the existing behavior for users who have not opened
+    # settings yet or while the preferences migration is rolling out.
+    owner_id = entity.get("user_id")
+    recipient = entity.get("email")
+    if owner_id:
+        try:
+            preference = (
+                supabase_admin.table("notification_preferences")
+                .select("email_alerts_enabled")
+                .eq("user_id", owner_id)
+                .maybe_single()
+                .execute()
+            )
+            if preference.data and not preference.data.get("email_alerts_enabled", True):
+                return False
+        except Exception as e:
+            logging.warning("Could not load notification preference for %s: %s", owner_id, e)
+
+        try:
+            owner = (
+                supabase_admin.table("users")
+                .select("email")
+                .eq("id", owner_id)
+                .maybe_single()
+                .execute()
+            )
+            if owner.data:
+                recipient = owner.data.get("email") or recipient
+        except Exception as e:
+            logging.warning("Could not load alert recipient for %s: %s", owner_id, e)
+
+    recipient = recipient or os.getenv("ALERT_EMAIL_FALLBACK")
+    if not recipient:
+        logging.warning("Email alert skipped for %s: no recipient configured", entity.get("id"))
+        return False
 
     status_emoji = {
         "healthy": "✅",

@@ -57,6 +57,17 @@ class BrandCreateRequest(BaseModel):
 class CompetitorAddRequest(BaseModel):
     name: str  # Competitor name to link to an existing entity
 
+
+class EntityUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    profile_type: Optional[str] = None
+    social_handle: Optional[str] = None
+
+
+class NotificationPreferencesRequest(BaseModel):
+    email_alerts_enabled: bool = True
+    daily_digest_enabled: bool = False
+
 # =========================================================
 # AUTH DEPENDENCIES
 # =========================================================
@@ -117,6 +128,49 @@ def check_db_connection():
     except Exception as e:
         logging.error("Database health check failed: %s", e)
         raise HTTPException(status_code=503, detail="Database unavailable")
+
+
+@app.get("/notification-preferences")
+def get_notification_preferences(user = Depends(verify_user)):
+    try:
+        result = (
+            supabase_admin.table("notification_preferences")
+            .select("email_alerts_enabled, daily_digest_enabled")
+            .eq("user_id", user.id)
+            .maybe_single()
+            .execute()
+        )
+        return getattr(result, "data", None) or {
+            "email_alerts_enabled": True,
+            "daily_digest_enabled": False,
+        }
+    except Exception as e:
+        logging.error("Notification preferences lookup failed for %s: %s", user.id, e)
+        raise HTTPException(status_code=500, detail="Could not load notification preferences")
+
+
+@app.put("/notification-preferences")
+def update_notification_preferences(
+    payload: NotificationPreferencesRequest,
+    user = Depends(verify_user),
+):
+    preferences = {
+        "user_id": user.id,
+        "email_alerts_enabled": payload.email_alerts_enabled,
+        "daily_digest_enabled": payload.daily_digest_enabled,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        result = (
+            supabase_admin.table("notification_preferences")
+            .upsert(preferences, on_conflict="user_id")
+            .execute()
+        )
+    except Exception as e:
+        logging.error("Notification preferences update failed for %s: %s", user.id, e)
+        raise HTTPException(status_code=500, detail="Could not update notification preferences")
+    saved = getattr(result, "data", [])
+    return saved[0] if saved else preferences
 
 # =========================================================
 # BACKGROUND WORKER
@@ -386,3 +440,56 @@ async def add_competitor(
         raise HTTPException(status_code=500, detail="Could not add competitor")
 
     return {"success": True, "competitor_entity_id": comp_id}
+
+
+@app.patch("/entities/{entity_id}")
+def update_entity(
+    entity_id: str,
+    payload: EntityUpdateRequest,
+    user = Depends(verify_user),
+):
+    """Updates an entity owned by the authenticated user."""
+    try:
+        existing = (
+            supabase_admin.table("monitored_entities")
+            .select("id, user_id")
+            .eq("id", entity_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error("Entity lookup failed for %s: %s", entity_id, e)
+        raise HTTPException(status_code=500, detail="Could not look up entity")
+
+    entity = getattr(existing, "data", None)
+    if not entity or entity["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "name" in updates:
+        updates["name"] = updates["name"].strip()
+        if not updates["name"]:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+    if "social_handle" in updates and updates["social_handle"] is not None:
+        updates["social_handle"] = updates["social_handle"].strip() or None
+    if "profile_type" in updates and updates["profile_type"] not in {
+        "business", "influencer", "student", "real_estate"
+    }:
+        raise HTTPException(status_code=400, detail="Invalid profile type")
+
+    if not updates:
+        return {"success": True, "entity": entity}
+
+    try:
+        result = (
+            supabase_admin.table("monitored_entities")
+            .update(updates)
+            .eq("id", entity_id)
+            .execute()
+        )
+    except Exception as e:
+        logging.error("Entity update failed for %s: %s", entity_id, e)
+        raise HTTPException(status_code=500, detail="Could not update entity")
+
+    updated = getattr(result, "data", [])
+    return {"success": True, "entity": updated[0] if updated else {**entity, **updates}}

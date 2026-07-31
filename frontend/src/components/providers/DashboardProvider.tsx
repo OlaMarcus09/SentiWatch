@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  useCallback,
   createContext,
   useContext,
   useEffect,
@@ -61,6 +62,7 @@ interface DashboardContextValue {
   // Theme
   theme: 'light' | 'dark';
   toggleTheme: () => void;
+  refreshCompetitors: () => Promise<void>;
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
@@ -104,6 +106,19 @@ export default function DashboardProvider({
 
   // Theme
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+
+  const refreshCompetitors = useCallback(async () => {
+    if (!currentEntity?.id) return;
+    const { data, error } = await supabase
+      .from('competitor_links')
+      .select('competitor_entity_id, monitored_entities!competitor_entity_id(*, risk_scores(*))')
+      .eq('primary_entity_id', currentEntity.id);
+    if (error) {
+      console.error('Failed to refresh competitors:', error);
+      return;
+    }
+    setCompetitorsData((data || []).map((link: any) => link.monitored_entities).filter(Boolean));
+  }, [currentEntity?.id]);
 
   useEffect(() => {
     const stored = typeof window !== 'undefined' ? localStorage.getItem('theme') : null;
@@ -404,6 +419,7 @@ export default function DashboardProvider({
       rootCauseSummary,
       theme,
       toggleTheme,
+      refreshCompetitors,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -422,6 +438,7 @@ export default function DashboardProvider({
       finalRiskScore,
       previousRiskScore,
       theme,
+      refreshCompetitors,
     ]
   );
 

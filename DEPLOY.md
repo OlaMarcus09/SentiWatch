@@ -5,6 +5,9 @@ Before deploying the reputation-integrity update, run
 It enables entity-scoped mention deduplication, risk-score history, and durable
 background-pipeline status reporting.
 
+Run `scripts/2026-07-31_notification_preferences.sql` as well to enable the
+persisted email-alert and daily-digest controls in Settings.
+
 Railway's trial expired, so the backend now runs on **Render's free tier**
 (no credit card, never expires) and the hourly pipeline runs as a **free
 GitHub Actions scheduled workflow** instead of an always-on worker.

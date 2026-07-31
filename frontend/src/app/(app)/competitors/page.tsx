@@ -7,7 +7,7 @@ import CompetitorComparisonMatrix from '@/components/dashboard/CompetitorCompari
 import Card from '@/components/ui/Card';
 
 export default function CompetitorsPage() {
-  const { currentEntity, competitorsData, userToken, finalRiskScore } = useDashboard();
+  const { currentEntity, competitorsData, userToken, finalRiskScore, refreshCompetitors } = useDashboard();
 
   const [name, setName] = useState('');
   const [isAdding, setIsAdding] = useState(false);
@@ -38,6 +38,7 @@ export default function CompetitorsPage() {
 
       setName('');
       setSubmitted(true);
+      await refreshCompetitors();
     } catch (err) {
       console.error(err);
       setError('Could not add competitor. Please try again.');
@@ -96,7 +97,7 @@ export default function CompetitorsPage() {
         )}
         {submitted && !error && (
           <p role="status" className="text-xs text-emerald-600 dark:text-emerald-400 mt-3">
-            Competitor added. Refresh in a moment to see its risk analysis.
+            Competitor added. Its risk analysis is now running in the background.
           </p>
         )}
       </Card>
