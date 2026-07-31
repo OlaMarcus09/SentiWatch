@@ -317,8 +317,13 @@ def _normalise_source(raw: str) -> str:
         "google reviews": "google_reviews",
         "nigerian news feed": "nigerian_news",
         "public forums (x/reddit)": "reddit",
+        "reddit": "reddit",
         "twitter": "twitter",
+        "twitter/x": "twitter",
+        "x": "twitter",
         "facebook": "facebook",
+        "youtube": "other",
+        "tavily_live_search": "nigerian_news",
         "linkedin": "linkedin",
         "nairaland": "nairaland",
         "vanguard": "vanguard",
@@ -335,14 +340,6 @@ def _normalise_source(raw: str) -> str:
 # Save Risk Score
 # ──────────────────────────────────────────────────────
 def save_risk_score(entity_id: str, score: dict):
-    existing = (
-        supabase_admin
-        .table("risk_scores")
-        .select("id")
-        .eq("entity_id", entity_id)
-        .execute()
-    ).data
-
     payload = {
         "entity_id": entity_id,
         "score": score["score"],
@@ -354,19 +351,25 @@ def save_risk_score(entity_id: str, score: dict):
         "root_cause_summary": score.get("root_cause_summary", "")
     }
 
-    if existing:
+    try:
+        # Risk scores are snapshots, not mutable entity state. Keeping every
+        # calculation makes trend deltas and incident timelines meaningful.
+        (
+            supabase_admin
+            .table("risk_scores")
+            .insert(payload)
+            .execute()
+        )
+    except Exception as e:
+        # Backward-compatible fallback for deployments that still enforce a
+        # unique(entity_id) constraint. Apply the bundled migration to enable
+        # history; until then, retain the previous update behavior.
+        logging.warning("Risk history insert failed; updating current row: %s", e)
         (
             supabase_admin
             .table("risk_scores")
             .update(payload)
             .eq("entity_id", entity_id)
-            .execute()
-        )
-    else:
-        (
-            supabase_admin
-            .table("risk_scores")
-            .insert(payload)
             .execute()
         )
 

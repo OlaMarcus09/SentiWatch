@@ -18,6 +18,15 @@ interface Alert {
   timestamp: string;
 }
 
+const PIPELINE_STAGE_MESSAGES: Record<string, string> = {
+  starting: 'Starting reputation analysis…',
+  collecting_mentions: 'Collecting public mentions…',
+  searching_web: 'Searching current web coverage…',
+  analyzing_sentiment: 'Classifying sentiment and reputation risk…',
+  calculating_risk: 'Calculating the reputation risk index…',
+  completed: 'Analysis complete.',
+};
+
 interface DashboardContextValue {
   // Status
   loading: boolean;
@@ -214,12 +223,46 @@ export default function DashboardProvider({
 
           // Check if FastAPI background worker has finished saving the risk score.
           // Fetch the two most recent rows so we can compute a real trend delta.
-          const { data: riskRows } = await supabase
-            .from('risk_scores')
-            .select('*')
-            .eq('entity_id', activeEntity.id)
-            .order('created_at', { ascending: false })
-            .limit(2);
+          const [{ data: riskRows, error: riskError }, { data: pipelineRun, error: pipelineError }] = await Promise.all([
+            supabase
+              .from('risk_scores')
+              .select('*')
+              .eq('entity_id', activeEntity.id)
+              .order('created_at', { ascending: false })
+              .limit(2),
+            supabase
+              .from('pipeline_runs')
+              .select('status, stage, error_message, started_at')
+              .eq('entity_id', activeEntity.id)
+              .order('started_at', { ascending: false })
+              .limit(1)
+              .maybeSingle(),
+          ]);
+
+          // Stay compatible while the pipeline_runs migration rolls out.
+          if (pipelineError && pipelineError.code !== '42P01') {
+            console.error('Failed to load pipeline status:', pipelineError);
+          }
+
+          if (pipelineRun?.status === 'failed') {
+            setError(
+              pipelineRun.error_message
+                ? `Analysis failed: ${pipelineRun.error_message}`
+                : 'Analysis failed. Please try creating the entity again.'
+            );
+            setLoading(false);
+            return;
+          }
+
+          if (pipelineRun?.status === 'running' && pipelineRun.stage) {
+            setLoadingMessage(
+              PIPELINE_STAGE_MESSAGES[pipelineRun.stage] || 'Reputation analysis is running…'
+            );
+          }
+
+          if (riskError) {
+            console.error('Failed to load risk score:', riskError);
+          }
 
           const riskData = riskRows?.[0] || null;
           const priorRisk = riskRows?.[1] || null;
@@ -229,7 +272,8 @@ export default function DashboardProvider({
             pollInterval = setTimeout(checkDataReady, 3000);
             return;
           } else if (!riskData && pollCount >= MAX_POLLS) {
-            setError('Pipeline timeout. The AI is taking longer than expected. Please refresh.');
+            setError('Analysis is taking longer than expected. Please refresh to check its latest status.');
+            setLoading(false);
             return;
           }
 

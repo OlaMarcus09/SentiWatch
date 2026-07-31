@@ -16,7 +16,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Run backend integrity tests
+        run: python -m unittest discover -s backend/tests -v
+
   run-pipeline:
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

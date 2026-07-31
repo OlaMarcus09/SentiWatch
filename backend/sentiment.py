@@ -230,7 +230,7 @@ def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
         .select("mention_id")
         .execute()
     )
-    processed_ids = [row["mention_id"] for row in processed_res.data]
+    processed_ids = [row["mention_id"] for row in (processed_res.data or [])]
 
     # 2. Build the base query — filter by entity_id if provided
     query = supabase_admin.table("mentions").select("*")
@@ -243,9 +243,16 @@ def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
         query = query.not_.in_("id", processed_ids)
 
     # 4. Newest first, hard limit
-    mentions_res = query.order("created_at", desc=True).limit(limit).execute()
+    # Fetch extra candidates because terminally rejected rows may be mixed into
+    # older schemas where status cannot be filtered server-side yet.
+    mentions_res = query.order("created_at", desc=True).limit(limit * 5).execute()
 
-    return mentions_res.data
+    # Relevance rejections are terminal decisions. Older deployments may not
+    # have populated status, so null/missing status remains eligible.
+    return [
+        mention for mention in (mentions_res.data or [])
+        if mention.get("status") not in {"rejected", "processed"}
+    ][:limit]
 
 
 RELEVANCE_SYSTEM_PROMPT = """
@@ -346,6 +353,22 @@ def save_sentiment(mention_id: str, result: Dict[str, Any]):
         "reason": result["reason"]
     }
     supabase_admin.table("sentiment_results").insert(payload).execute()
+    _set_mention_status(mention_id, "processed")
+
+
+def _set_mention_status(mention_id: str, status: str):
+    """Best-effort lifecycle marker for durable processing decisions."""
+    try:
+        (
+            supabase_admin.table("mentions")
+            .update({"status": status})
+            .eq("id", mention_id)
+            .execute()
+        )
+    except Exception as e:
+        # Some older schemas may not have the status column yet. Sentiment rows
+        # still prevent duplicate full analysis in that case.
+        logging.warning("Could not mark mention %s as %s: %s", mention_id, status, e)
 
 
 # Synchronous pipeline. All Groq/Supabase calls below are blocking, so this
@@ -449,7 +472,7 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, l
 
         if not is_relevant(text, brand_name, profile_type, competitors):
             logging.info(f"Skipped irrelevant mention {mention_id}")
-            failed += 1
+            _set_mention_status(mention_id, "rejected")
             continue
 
         try:

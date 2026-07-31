@@ -99,7 +99,7 @@ from pg_class
 where relnamespace = 'public'::regnamespace
   and relname in (
     'monitored_entities', 'mentions', 'sentiment_results',
-    'risk_scores', 'recommendations', 'competitor_links', 'users'
+    'risk_scores', 'recommendations', 'competitor_links', 'pipeline_runs', 'users'
   )
 order by relname;
 ```
@@ -124,6 +124,7 @@ order by tablename, policyname;
   to them (join back to `monitored_entities.user_id = auth.uid()`).
 - `competitor_links`: readable only when the `primary_entity_id` belongs to the
   requesting user.
+- `pipeline_runs`: readable only when its parent entity belongs to the user.
 - `users`: a user may select/update only their own row (`id = auth.uid()`).
 
 ### 4d. Example policies (apply only where missing)

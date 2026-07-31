@@ -7,6 +7,7 @@ import os
 import asyncio
 import secrets
 import logging
+from datetime import datetime, timezone
 from supabase import create_client, Client
 
 from database import supabase, supabase_admin
@@ -114,24 +115,69 @@ def check_db_connection():
         supabase.table("monitored_entities").select("id").limit(1).execute()
         return {"database_status": "Connected to Supabase successfully", "error": None}
     except Exception as e:
-        return {"database_status": "Connection failed", "error": str(e)}
+        logging.error("Database health check failed: %s", e)
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
 # =========================================================
 # BACKGROUND WORKER
 # =========================================================
 
 # 1. Change to `async def` to support the Tavily await call
+def _record_pipeline_run(entity_id: str, status: str, stage: str, error: str | None = None):
+    """Persist background progress when the pipeline_runs migration is present."""
+    payload = {
+        "entity_id": entity_id,
+        "status": status,
+        "stage": stage,
+        "error_message": error,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if status == "running" and stage == "starting":
+        payload["started_at"] = payload["updated_at"]
+    if status in {"completed", "failed"}:
+        payload["finished_at"] = payload["updated_at"]
+
+    try:
+        if status == "running" and stage == "starting":
+            supabase_admin.table("pipeline_runs").insert(payload).execute()
+            return
+
+        existing = (
+            supabase_admin.table("pipeline_runs")
+            .select("id")
+            .eq("entity_id", entity_id)
+            .eq("status", "running")
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            (
+                supabase_admin.table("pipeline_runs")
+                .update(payload)
+                .eq("id", existing.data[0]["id"])
+                .execute()
+            )
+        else:
+            supabase_admin.table("pipeline_runs").insert(payload).execute()
+    except Exception as e:
+        # Deploying code before the migration remains safe.
+        logging.warning("Could not persist pipeline status for %s: %s", entity_id, e)
+
+
 async def run_analysis_pipeline(entity_id: str, brand_name: str, profile_type: str):
     """
     Executes the heavy scraping and Groq AI tasks in the background.
     Now properly asynchronous to prevent event-loop blocking.
     """
+    _record_pipeline_run(entity_id, "running", "starting")
     try:
         print(f"Starting pipeline for {brand_name} ({profile_type})...")
 
         # Fire standard scrapers (blocking requests calls -> offload to threads).
         # YouTube/Twitter/Facebook are env-gated no-ops until their keys are set,
         # so this is safe to run today.
+        _record_pipeline_run(entity_id, "running", "collecting_mentions")
         await asyncio.to_thread(scrape_nigerian_news, entity_id, brand_name)
         await asyncio.to_thread(scrape_social_media, entity_id, brand_name)
         await asyncio.to_thread(scrape_youtube, entity_id, brand_name)
@@ -139,9 +185,11 @@ async def run_analysis_pipeline(entity_id: str, brand_name: str, profile_type: s
         await asyncio.to_thread(scrape_facebook, entity_id, brand_name)
 
         # Fetch live web context using Tavily (natively async)
+        _record_pipeline_run(entity_id, "running", "searching_web")
         live_context = await fetch_entity_context(brand_name, profile_type)
 
         # Run the synchronous sentiment analyzer off the event loop
+        _record_pipeline_run(entity_id, "running", "analyzing_sentiment")
         await asyncio.to_thread(
             analyze_and_store_sentiment,
             entity_id,
@@ -150,11 +198,14 @@ async def run_analysis_pipeline(entity_id: str, brand_name: str, profile_type: s
         )
 
         # Risk calculation is blocking (Supabase + Resend) -> offload
+        _record_pipeline_run(entity_id, "running", "calculating_risk")
         await asyncio.to_thread(calculate_risk_and_alert, entity_id)
+        _record_pipeline_run(entity_id, "completed", "completed")
         print(f"Pipeline complete for {brand_name}.")
 
     except Exception as e:
-        print(f"Pipeline error for {brand_name}:", e)
+        logging.exception("Pipeline error for %s", brand_name)
+        _record_pipeline_run(entity_id, "failed", "failed", str(e)[:500])
 
 
 # =========================================================

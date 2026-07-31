@@ -1,5 +1,10 @@
 # SentiWatch Deployment (Render + GitHub Actions)
 
+Before deploying the reputation-integrity update, run
+`scripts/2026-07-30_reputation_integrity.sql` once in the Supabase SQL editor.
+It enables entity-scoped mention deduplication, risk-score history, and durable
+background-pipeline status reporting.
+
 Railway's trial expired, so the backend now runs on **Render's free tier**
 (no credit card, never expires) and the hourly pipeline runs as a **free
 GitHub Actions scheduled workflow** instead of an always-on worker.

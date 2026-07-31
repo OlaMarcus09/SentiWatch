@@ -10,12 +10,19 @@ from services import apify_client
 
 def _insert_mention(entity_id: str, source: str, content: str, url: str) -> bool:
     """
-    Dedup-by-url insert into `mentions`. Returns True if a new row was written.
+    Dedup by entity + URL. The same article can legitimately mention multiple
+    tracked entities, so URL-only deduplication loses data for later entities.
     Shared by all social scrapers so they behave identically.
     """
     if not content or not url:
         return False
-    exists = supabase_admin.table("mentions").select("id").eq("url", url).execute()
+    exists = (
+        supabase_admin.table("mentions")
+        .select("id")
+        .eq("entity_id", entity_id)
+        .eq("url", url)
+        .execute()
+    )
     if exists.data:
         return False
     supabase_admin.table("mentions").insert({
@@ -85,19 +92,8 @@ def scrape_nigerian_news(entity_id: str, brand_name: str) -> int:
             link = article.get('link', '')
             
             # Check if already exists
-            exists = supabase_admin.table("mentions").select("id").eq("url", link).execute()
-            if exists.data:
-                continue
-            
-            # Insert directly — no filter needed since RSS search already filtered
-            supabase_admin.table("mentions").insert({
-                "entity_id": entity_id,
-                "content": title,
-                "url": link,
-                "source": "Nigerian News Feed",
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }).execute()
-            inserted_count += 1
+            if _insert_mention(entity_id, "Nigerian News Feed", title, link):
+                inserted_count += 1
         
         return inserted_count
     
@@ -123,7 +119,13 @@ def fetch_google_reviews(entity_id: str, place_id: str) -> int:
 
             # Fallback to a realistic data entry if no real place_id is passed yet
             link = "https://maps.google.com/?cid=mock"
-            exists = supabase_admin.table("mentions").select("id").eq("url", link).execute()
+            exists = (
+                supabase_admin.table("mentions")
+                .select("id")
+                .eq("entity_id", entity_id)
+                .eq("url", link)
+                .execute()
+            )
             if exists.data:
                 return 0
                 

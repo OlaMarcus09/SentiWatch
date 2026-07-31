@@ -1,0 +1,119 @@
+import os
+import sys
+import types
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BACKEND_DIR))
+
+# Backend modules construct clients at import time. Placeholder credentials are
+# sufficient because these unit tests mock every database operation.
+os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
+os.environ.setdefault("SUPABASE_KEY", "test-anon-key")
+
+try:
+    import resend  # noqa: F401
+except ModuleNotFoundError:
+    # Keep the unit suite runnable in lightweight environments; these tests do
+    # not exercise email delivery.
+    sys.modules["resend"] = types.SimpleNamespace(
+        api_key=None,
+        Emails=types.SimpleNamespace(send=lambda *_args, **_kwargs: None),
+    )
+
+import risk_engine  # noqa: E402
+import scrapers  # noqa: E402
+import scoring  # noqa: E402
+import sentiment  # noqa: E402
+
+
+class QueryDouble:
+    def __init__(self, data=None):
+        self.data = data or []
+        self.filters = []
+        self.inserted = None
+
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, column, value):
+        self.filters.append((column, value))
+        return self
+
+    def insert(self, payload):
+        self.inserted = payload
+        return self
+
+    def execute(self):
+        return MagicMock(data=self.data)
+
+
+class ReputationIntegrityTests(unittest.TestCase):
+    def test_mention_deduplication_is_scoped_to_entity(self):
+        lookup = QueryDouble(data=[])
+        insert = QueryDouble(data=[])
+        admin = MagicMock()
+        admin.table.side_effect = [lookup, insert]
+
+        with patch.object(scrapers, "supabase_admin", admin):
+            created = scrapers._insert_mention(
+                "entity-a", "Reddit", "A meaningful mention", "https://example.com/post"
+            )
+
+        self.assertTrue(created)
+        self.assertIn(("entity_id", "entity-a"), lookup.filters)
+        self.assertIn(("url", "https://example.com/post"), lookup.filters)
+        self.assertEqual(insert.inserted["entity_id"], "entity-a")
+
+    def test_hard_negative_signal_cannot_be_neutral(self):
+        result = sentiment.validate_ai_output(
+            {
+                "sentiment": "neutral",
+                "category": "general",
+                "sub_category": "general",
+                "severity": 2,
+                "confidence": 0.9,
+                "risk": "low",
+                "root_cause": "Unclear report",
+                "reason": "Insufficient context",
+            },
+            "Customers paid for land but received no refund three years later.",
+        )
+
+        self.assertEqual(result["sentiment"], "negative")
+        self.assertGreaterEqual(result["severity"], 8)
+        self.assertIn(result["risk"], {"high", "critical"})
+
+    def test_source_names_are_normalized_to_scoring_keys(self):
+        self.assertEqual(risk_engine._normalise_source("Twitter/X"), "twitter")
+        self.assertEqual(risk_engine._normalise_source("Reddit"), "reddit")
+        self.assertEqual(risk_engine._normalise_source("tavily_live_search"), "nigerian_news")
+
+    def test_positive_mentions_reduce_aggregate_risk(self):
+        now = datetime.now(timezone.utc).isoformat()
+        negative = {
+            "label": "negative",
+            "severity": 5,
+            "confidence": 1,
+            "source": "reddit",
+            "category": "general",
+            "risk_level": "low",
+            "created_at": now,
+        }
+        positive = {
+            **negative,
+            "label": "positive",
+            "category": "customer_praise",
+        }
+
+        negative_only = scoring.calculate_entity_score([negative])["score"]
+        balanced = scoring.calculate_entity_score([negative, positive])["score"]
+        self.assertLess(balanced, negative_only)
+
+
+if __name__ == "__main__":
+    unittest.main()
