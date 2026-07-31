@@ -114,6 +114,43 @@ class ReputationIntegrityTests(unittest.TestCase):
         balanced = scoring.calculate_entity_score([negative, positive])["score"]
         self.assertLess(balanced, negative_only)
 
+    def test_email_alert_is_not_repeated_above_threshold(self):
+        with patch.object(risk_engine.resend.Emails, "send") as send:
+            sent = risk_engine.send_email(
+                {"id": "entity-a", "name": "Example", "profile_type": "business"},
+                {
+                    "score": 80,
+                    "status": "critical",
+                    "negative_mentions": 3,
+                    "positive_mentions": 0,
+                    "neutral_mentions": 0,
+                },
+                previous_score=70,
+            )
+
+        self.assertFalse(sent)
+        send.assert_not_called()
+
+    def test_email_delivery_failure_does_not_raise(self):
+        with patch.dict(os.environ, {"ALERT_EMAIL_FALLBACK": "alerts@example.com"}), patch.object(
+            risk_engine.resend.Emails,
+            "send",
+            side_effect=RuntimeError("provider unavailable"),
+        ):
+            sent = risk_engine.send_email(
+                {"id": "entity-a", "name": "Example", "profile_type": "business"},
+                {
+                    "score": 80,
+                    "status": "critical",
+                    "negative_mentions": 3,
+                    "positive_mentions": 0,
+                    "neutral_mentions": 0,
+                },
+                previous_score=40,
+            )
+
+        self.assertFalse(sent)
+
 
 if __name__ == "__main__":
     unittest.main()

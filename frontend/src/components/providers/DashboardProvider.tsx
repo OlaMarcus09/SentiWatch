@@ -63,6 +63,7 @@ interface DashboardContextValue {
   theme: 'light' | 'dark';
   toggleTheme: () => void;
   refreshCompetitors: () => Promise<void>;
+  updateCurrentEntity: (patch: Record<string, any>) => void;
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
@@ -120,6 +121,13 @@ export default function DashboardProvider({
     setCompetitorsData((data || []).map((link: any) => link.monitored_entities).filter(Boolean));
   }, [currentEntity?.id]);
 
+  const updateCurrentEntity = useCallback((patch: Record<string, any>) => {
+    setCurrentEntity((previous: any) => previous ? { ...previous, ...patch } : previous);
+    setAllEntities((previous) => previous.map((entity) =>
+      entity.id === currentEntity?.id ? { ...entity, ...patch } : entity
+    ));
+  }, [currentEntity?.id]);
+
   useEffect(() => {
     const stored = typeof window !== 'undefined' ? localStorage.getItem('theme') : null;
     const isDark = stored ? stored === 'dark' : document.documentElement.classList.contains('dark');
@@ -153,6 +161,7 @@ export default function DashboardProvider({
 
     async function loadData() {
       try {
+        if (isMounted) setError(null);
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) {
           if (isMounted) router.push('/login');
@@ -259,7 +268,13 @@ export default function DashboardProvider({
             console.error('Failed to load pipeline status:', pipelineError);
           }
 
-          if (pipelineRun?.status === 'failed') {
+          const latestRiskCreatedAt = riskRows?.[0]?.created_at;
+          const failureIsNewerThanRisk = !latestRiskCreatedAt || (
+            pipelineRun?.started_at &&
+            new Date(pipelineRun.started_at).getTime() >= new Date(latestRiskCreatedAt).getTime()
+          );
+
+          if (pipelineRun?.status === 'failed' && failureIsNewerThanRisk) {
             setError(
               pipelineRun.error_message
                 ? `Analysis failed: ${pipelineRun.error_message}`
@@ -324,7 +339,11 @@ export default function DashboardProvider({
             setPreviousRiskScore(priorRisk ? Math.min(priorRisk.score || 0, 100) : null);
             setRiskScoreData(riskData);
             setRecommendation(recData);
+            setError(null);
             setLoading(false);
+            // Keep an open dashboard current while scheduled or background
+            // analysis writes new mentions and scores.
+            pollInterval = setTimeout(checkDataReady, 30000);
           }
         };
 
@@ -420,6 +439,7 @@ export default function DashboardProvider({
       theme,
       toggleTheme,
       refreshCompetitors,
+      updateCurrentEntity,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -439,6 +459,7 @@ export default function DashboardProvider({
       previousRiskScore,
       theme,
       refreshCompetitors,
+      updateCurrentEntity,
     ]
   );
 

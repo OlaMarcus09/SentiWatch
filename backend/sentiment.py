@@ -356,6 +356,56 @@ def save_sentiment(mention_id: str, result: Dict[str, Any]):
     _set_mention_status(mention_id, "processed")
 
 
+def reprocess_existing_sentiment(entity_id: str, limit: int = 100) -> Dict[str, int]:
+    """Re-score existing sentiment rows after classifier/backstop changes.
+
+    This is intentionally bounded and called only by the authenticated internal
+    maintenance endpoint. Existing rows are updated in place, preserving their
+    mention identity and avoiding duplicate sentiment records.
+    """
+    rows = (
+        supabase_admin.table("mentions")
+        .select("id, content")
+        .eq("entity_id", entity_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    ).data or []
+    if not rows:
+        return {"processed": 0, "failed": 0}
+
+    sentiment_rows = (
+        supabase_admin.table("sentiment_results")
+        .select("id, mention_id")
+        .in_("mention_id", [row["id"] for row in rows])
+        .execute()
+    ).data or []
+    by_mention = {row["mention_id"]: row["id"] for row in sentiment_rows}
+    processed = failed = 0
+    for mention in rows:
+        result_id = by_mention.get(mention["id"])
+        if not result_id:
+            continue
+        try:
+            result = validate_ai_output(call_groq(mention.get("content", "")), mention.get("content", ""))
+            payload = {
+                "label": result["sentiment"],
+                "confidence": result["confidence"],
+                "severity": result["severity"],
+                "category": result["category"],
+                "sub_category": result.get("sub_category", "general"),
+                "risk_level": result["risk"],
+                "root_cause": result.get("root_cause", "No root cause identified"),
+                "reason": result["reason"],
+            }
+            supabase_admin.table("sentiment_results").update(payload).eq("id", result_id).execute()
+            processed += 1
+        except Exception as exc:
+            logging.warning("Legacy sentiment reprocess failed for %s: %s", mention["id"], exc)
+            failed += 1
+    return {"processed": processed, "failed": failed}
+
+
 def _set_mention_status(mention_id: str, status: str):
     """Best-effort lifecycle marker for durable processing decisions."""
     try:

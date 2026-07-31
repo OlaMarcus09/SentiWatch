@@ -31,6 +31,12 @@ services:
         sync: false
       - key: INTERNAL_API_KEY
         sync: false
+      - key: APIFY_TOKEN
+        sync: false
+      - key: APIFY_TWITTER_ACTOR
+        sync: false
+      - key: APIFY_FACEBOOK_ACTOR
+        sync: false
       # Leave unset (or "false") in production so no mock data is written.
       - key: ENABLE_MOCK_REVIEWS
         value: "false"

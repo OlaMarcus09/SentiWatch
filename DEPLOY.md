@@ -8,6 +8,9 @@ background-pipeline status reporting.
 Run `scripts/2026-07-31_notification_preferences.sql` as well to enable the
 persisted email-alert and daily-digest controls in Settings.
 
+Run `scripts/2026-07-31_backend_hardening.sql` to enable owned recommendation
+reads and enforce unique competitor links before deploying this hardening pass.
+
 Railway's trial expired, so the backend now runs on **Render's free tier**
 (no credit card, never expires) and the hourly pipeline runs as a **free
 GitHub Actions scheduled workflow** instead of an always-on worker.
@@ -116,12 +119,16 @@ Redeploy the frontend. Also update Render's CORS if it pins origins (check
 
 ---
 
-## Known follow-up (not blocking deploy)
+## Scheduled pipeline reliability
 
-`cron_sync.py` lists entities with the **anon** Supabase client
-(`from database import supabase`). If RLS on `monitored_entities` restricts
-`select` to `auth.uid()`, an unauthenticated anon query may return **zero rows**,
-so the cron would find nothing to process. If you see "No monitored entities
-found" despite having data, switch that query to the admin client
-(`supabase_admin`) or add a service-role read path. Verify against your actual
-RLS policies (see `SECURITY.md` §4).
+`cron_sync.py` inventories monitored entities with the Supabase service-role
+client so user-scoped RLS cannot hide them. Both Render and GitHub Actions must
+have `SUPABASE_SERVICE_ROLE`; privileged backend work now fails clearly when it
+is absent instead of silently falling back to the anon client.
+
+Each entity runs through scrape, analysis, and risk calculation sequentially.
+The default scrape timeout is 300 seconds, which covers the two synchronous
+Apify actor calls. Override `PIPELINE_SYNC_TIMEOUT`,
+`PIPELINE_ANALYZE_TIMEOUT`, or `PIPELINE_RISK_TIMEOUT` in the Actions workflow
+if provider latency changes. A failed stage stops that entity, continues with
+the remaining entities, and makes the workflow fail after reporting totals.

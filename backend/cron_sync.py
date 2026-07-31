@@ -1,10 +1,11 @@
 # backend/cron_sync.py
 import time
 import requests
-from database import supabase
+from database import require_supabase_admin
 import os
 import sys
 import logging
+from dataclasses import dataclass
 
 # Configure logging
 logging.basicConfig(
@@ -14,10 +15,24 @@ logging.basicConfig(
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+SYNC_TIMEOUT = int(os.getenv("PIPELINE_SYNC_TIMEOUT", "300"))
+ANALYZE_TIMEOUT = int(os.getenv("PIPELINE_ANALYZE_TIMEOUT", "180"))
+RISK_TIMEOUT = int(os.getenv("PIPELINE_RISK_TIMEOUT", "60"))
 
 # Sent on every internal POST so the backend's verify_internal_key dependency
 # accepts these machine-to-machine calls.
 INTERNAL_HEADERS = {"X-Internal-Key": INTERNAL_API_KEY}
+
+
+@dataclass
+class PipelineSummary:
+    total: int = 0
+    succeeded: int = 0
+    failed: int = 0
+
+
+class PipelineRunError(RuntimeError):
+    pass
 
 
 def wait_for_backend(max_attempts: int = 10, delay: int = 8):
@@ -36,8 +51,40 @@ def wait_for_backend(max_attempts: int = 10, delay: int = 8):
             logging.info(f"⏳ Backend not ready (attempt {attempt}/{max_attempts}): {e}")
         time.sleep(delay)
 
-    logging.warning("⚠️ Backend did not respond to warmup; proceeding anyway.")
+    logging.error("Backend did not respond to warmup.")
     return False
+
+
+def _post_stage(path: str, entity: dict, timeout: int) -> bool:
+    """Call one internal stage and return whether it completed successfully."""
+    name = entity["name"]
+    try:
+        response = requests.post(
+            f"{BACKEND_URL}{path}",
+            params={
+                "brand_name": name,
+                **({"social_handle": entity.get("social_handle")} if entity.get("social_handle") else {}),
+            } if path.startswith("/sync/") else (
+                {"entity_id": entity["id"], "brand_name": name}
+                if path == "/analyze" else None
+            ),
+            headers=INTERNAL_HEADERS,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        logging.error("Request failed for %s at %s: %s", name, path, exc)
+        return False
+
+    if response.status_code != 200:
+        logging.error(
+            "Stage %s returned %s for %s: %s",
+            path,
+            response.status_code,
+            name,
+            response.text[:300],
+        )
+        return False
+    return True
 
 
 def run_automated_pipeline():
@@ -50,81 +97,67 @@ def run_automated_pipeline():
     """
     logging.info(f"⏰ Background sync started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # Wake the (possibly sleeping) free-tier web service before hitting endpoints.
-    wait_for_backend()
+    if not INTERNAL_API_KEY:
+        raise PipelineRunError("INTERNAL_API_KEY is required for scheduled pipeline calls")
+
+    # Resolve this before warmup so a missing service-role secret fails fast.
+    admin = require_supabase_admin()
+
+    if not wait_for_backend():
+        raise PipelineRunError("Backend is unavailable after warmup attempts")
 
     try:
         # 1. Fetch every monitored brand from the database
-        entities_res = supabase.table("monitored_entities").select("id, name").execute()
+        entities_res = admin.table("monitored_entities").select("id, name, social_handle").execute()
         entities = entities_res.data or []
-        
+
         if not entities:
             logging.info("No monitored entities found. Exiting.")
-            return
-        
+            return PipelineSummary()
+
         logging.info(f"Found {len(entities)} entities to process.")
-        
-        # 2. Trigger Scrapers for each entity
+        summary = PipelineSummary(total=len(entities))
+
+        # Process each entity in order. A failed scrape must not race ahead into
+        # analysis while an external actor may still be running.
         for entity in entities:
             entity_id = entity["id"]
             name = entity["name"]
-            logging.info(f"🔄 Syncing tracks for: {name}")
-            
-            try:
-                response = requests.post(
-                    f"{BACKEND_URL}/sync/{entity_id}?brand_name={name}",
-                    headers=INTERNAL_HEADERS,
-                    timeout=30
-                )
-                if response.status_code == 200:
-                    logging.info(f"✅ Sync successful for {name}")
-                else:
-                    logging.warning(f"⚠️ Sync returned {response.status_code} for {name}")
-            except Exception as e:
-                logging.error(f"❌ Sync error for {name}: {e}")
-        
-        # 3. Process Sentiments — pass entity context so gatekeeper works
-        logging.info("🧠 Running sentiment scoring engines...")
-        for entity in entities:
-            try:
-                response = requests.post(
-                    f"{BACKEND_URL}/analyze",
-                    params={
-                        "entity_id": entity["id"],
-                        "brand_name": entity["name"]
-                    },
-                    headers=INTERNAL_HEADERS,
-                    timeout=120  # Groq might take a few seconds per mention
-                )
-                if response.status_code == 200:
-                    logging.info(f"✅ Analysis complete for {entity['name']}")
-                else:
-                    logging.warning(f"⚠️ Analysis returned {response.status_code} for {entity['name']}")
-            except Exception as e:
-                logging.error(f"❌ Analysis error for {entity['name']}: {e}")
+            logging.info("Syncing sources for %s", name)
 
-        # 4. Evaluate Risk Calculations and Fire Alerts
-        logging.info("🚨 Recalculating alert thresholds...")
-        for entity in entities:
-            try:
-                response = requests.post(
-                    f"{BACKEND_URL}/calculate-risk/{entity['id']}",
-                    headers=INTERNAL_HEADERS,
-                    timeout=30
-                )
-                if response.status_code == 200:
-                    logging.info(f"✅ Risk calculation complete for {entity['name']}")
-                else:
-                    logging.warning(f"⚠️ Risk calculation returned {response.status_code} for {entity['name']}")
-            except Exception as e:
-                logging.error(f"❌ Risk calculation error for {entity['name']}: {e}")
-        
-        logging.info("✅ System sync cycle complete.")
-        
+            stages = (
+                (f"/sync/{entity_id}", SYNC_TIMEOUT, "sync"),
+                ("/analyze", ANALYZE_TIMEOUT, "analysis"),
+                (f"/calculate-risk/{entity_id}", RISK_TIMEOUT, "risk calculation"),
+            )
+            for path, timeout, label in stages:
+                if not _post_stage(path, entity, timeout):
+                    logging.error("Stopping %s pipeline after failed %s", name, label)
+                    summary.failed += 1
+                    break
+                logging.info("Completed %s for %s", label, name)
+            else:
+                summary.succeeded += 1
+
+        logging.info(
+            "System sync cycle complete: %s succeeded, %s failed, %s total",
+            summary.succeeded,
+            summary.failed,
+            summary.total,
+        )
+        if summary.failed:
+            raise PipelineRunError(
+                f"Pipeline failed for {summary.failed} of {summary.total} entities"
+            )
+        return summary
+
     except Exception as e:
-        logging.error(f"❌ Pipeline failed: {e}")
+        logging.exception("Pipeline failed: %s", e)
         raise
 
 if __name__ == "__main__":
-    run_automated_pipeline()
-    sys.exit(0)  # Important: Exit cleanly so the scheduler can run again next cycle
+    try:
+        run_automated_pipeline()
+    except Exception:
+        sys.exit(1)
+    sys.exit(0)

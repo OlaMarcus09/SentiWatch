@@ -5,7 +5,6 @@ import { motion } from 'framer-motion';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
-import { supabase } from '../../lib/supabase';
 import {
   Zap, Clock, Check, Copy, AlertCircle, AlertTriangle, Info, CheckCircle, X,
 } from 'lucide-react';
@@ -23,6 +22,7 @@ interface Rec {
 interface RecommendationCenterProps {
   recommendation: any;
   score: number;
+  userToken: string;
 }
 
 const PRIORITY_ICON: Record<Rec['priority'], React.ReactNode> = {
@@ -196,7 +196,7 @@ function ResponseModal({ rec, onClose }: { rec: Rec; onClose: () => void }) {
   );
 }
 
-export default function RecommendationCenter({ recommendation, score }: RecommendationCenterProps) {
+export default function RecommendationCenter({ recommendation, score, userToken }: RecommendationCenterProps) {
   const initialRecs = useMemo(
     () => parseRecommendations(recommendation, score)
       .filter((r) => r.status !== 'dismissed')
@@ -209,26 +209,23 @@ export default function RecommendationCenter({ recommendation, score }: Recommen
   const [statusMsg, setStatusMsg] = useState('');
 
   const persistDismiss = async (dismissedTitle: string) => {
-    if (!recommendation?.id) return;
-    try {
-      const remaining = recs
-        .filter((r) => r.title !== dismissedTitle)
-        .map((r) => ({ ...r, status: r.status ?? 'active' }));
-      const dismissed = recs
-        .filter((r) => r.title === dismissedTitle)
-        .map((r) => ({ ...r, status: 'dismissed' }));
-      await supabase
-        .from('recommendations')
-        .update({ action_plan: JSON.stringify({ recommendations: [...remaining, ...dismissed] }) })
-        .eq('id', recommendation.id);
-    } catch { /* non-fatal */ }
+    if (!recommendation?.id || !userToken) throw new Error('Missing recommendation credentials');
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/recommendations/${recommendation.id}/dismiss`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
+      body: JSON.stringify({ title: dismissedTitle }),
+    });
+    if (!response.ok) throw new Error('Dismissal failed');
   };
 
   const handleDismiss = (idx: number) => {
     const target = recs[idx];
     setRecs((prev) => prev.filter((_, i) => i !== idx));
     setStatusMsg(`Dismissed: ${target.title}`);
-    persistDismiss(target.title);
+    persistDismiss(target.title).catch(() => {
+      setRecs((prev) => [...prev, target].sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]));
+      setStatusMsg(`Could not dismiss ${target.title}. Please try again.`);
+    });
   };
 
   if (recs.length === 0) {

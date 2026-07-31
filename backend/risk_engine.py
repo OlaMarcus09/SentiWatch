@@ -377,8 +377,12 @@ def save_risk_score(entity_id: str, score: dict):
 # ──────────────────────────────────────────────────────
 # Send Email Alert
 # ──────────────────────────────────────────────────────
-def send_email(entity: dict, score: dict) -> bool:
+def send_email(entity: dict, score: dict, previous_score: int | None = None) -> bool:
+    # Alert only when risk enters the alert band. This prevents hourly cron runs
+    # from sending the same notification indefinitely while risk remains high.
     if score["score"] < EMAIL_ALERT_THRESHOLD:
+        return False
+    if previous_score is not None and previous_score >= EMAIL_ALERT_THRESHOLD:
         return False
 
     # Resolve the owning user's real address and persisted notification choice.
@@ -426,14 +430,15 @@ def send_email(entity: dict, score: dict) -> bool:
         "critical": "🚨",
     }.get(score["status"], "🔔")
 
-    resend.Emails.send({
-        "from": "SentiWatch <onboarding@resend.dev>",
-        "to": recipient,
-        "subject": (
-            f"{status_emoji} Reputation Alert — "
-            f"{entity['name']} scored {score['score']}/100"
-        ),
-        "html": f"""
+    try:
+        resend.Emails.send({
+            "from": "SentiWatch <onboarding@resend.dev>",
+            "to": recipient,
+            "subject": (
+                f"{status_emoji} Reputation Alert — "
+                f"{entity['name']} scored {score['score']}/100"
+            ),
+            "html": f"""
         <div style="font-family:sans-serif;max-width:560px;margin:0 auto;">
           <h2 style="color:#1A56DB;">SentiWatch Reputation Alert</h2>
           <p>
@@ -470,8 +475,11 @@ def send_email(entity: dict, score: dict) -> bool:
           </p>
         </div>
         """
-    })
-    return True
+        })
+        return True
+    except Exception as exc:
+        logging.warning("Email alert delivery failed for %s: %s", entity.get("id"), exc)
+        return False
 
 
 # ──────────────────────────────────────────────────────
@@ -490,7 +498,21 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
 
     mentions = fetch_mentions(entity_id)
     metrics = calculate_entity_score(mentions)
-    
+    previous_score = None
+    try:
+        previous = (
+            supabase_admin.table("risk_scores")
+            .select("score")
+            .eq("entity_id", entity_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        ).data or []
+        if previous:
+            previous_score = previous[0].get("score")
+    except Exception as exc:
+        logging.warning("Could not load previous risk score for %s: %s", entity_id, exc)
+
     save_risk_score(entity_id, metrics)
 
     final_score = metrics["score"]
@@ -534,7 +556,7 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
         "root_cause_summary": metrics.get("root_cause_summary", "")
     }).execute()
 
-    alert_sent = send_email(entity, metrics)
+    alert_sent = send_email(entity, metrics, previous_score)
 
     return {
         "entity": entity["name"],

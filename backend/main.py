@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends
 from services.search_service import fetch_entity_context
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
 import asyncio
@@ -19,7 +19,7 @@ from scrapers import (
     scrape_twitter,
     scrape_facebook,
 )
-from sentiment import analyze_and_store_sentiment
+from sentiment import analyze_and_store_sentiment, reprocess_existing_sentiment
 from risk_engine import calculate_risk_and_alert
 
 # PIVOT TODO: Import your new search service here once you create the file
@@ -51,7 +51,7 @@ class BrandCreateRequest(BaseModel):
     # New Pivot Fields
     profile_type: str = "business"  # e.g., student, influencer, business, real_estate
     social_handle: Optional[str] = None  # e.g., @gtbank
-    competitors: Optional[List[str]] = []  # Array of competitor names to track
+    competitors: List[str] = Field(default_factory=list)
 
 
 class CompetitorAddRequest(BaseModel):
@@ -67,6 +67,13 @@ class EntityUpdateRequest(BaseModel):
 class NotificationPreferencesRequest(BaseModel):
     email_alerts_enabled: bool = True
     daily_digest_enabled: bool = False
+
+
+class RecommendationDismissRequest(BaseModel):
+    title: str
+
+
+VALID_PROFILE_TYPES = {"business", "influencer", "student", "real_estate"}
 
 # =========================================================
 # AUTH DEPENDENCIES
@@ -140,10 +147,13 @@ def get_notification_preferences(user = Depends(verify_user)):
             .maybe_single()
             .execute()
         )
-        return getattr(result, "data", None) or {
+        preferences = getattr(result, "data", None) or {
             "email_alerts_enabled": True,
             "daily_digest_enabled": False,
         }
+        # Digest delivery is not scheduled yet. Expose that explicitly instead
+        # of presenting a persisted switch as a working notification channel.
+        return {**preferences, "daily_digest_available": False}
     except Exception as e:
         logging.error("Notification preferences lookup failed for %s: %s", user.id, e)
         raise HTTPException(status_code=500, detail="Could not load notification preferences")
@@ -154,6 +164,8 @@ def update_notification_preferences(
     payload: NotificationPreferencesRequest,
     user = Depends(verify_user),
 ):
+    if payload.daily_digest_enabled:
+        raise HTTPException(status_code=400, detail="Daily digest delivery is not available yet")
     preferences = {
         "user_id": user.id,
         "email_alerts_enabled": payload.email_alerts_enabled,
@@ -170,7 +182,8 @@ def update_notification_preferences(
         logging.error("Notification preferences update failed for %s: %s", user.id, e)
         raise HTTPException(status_code=500, detail="Could not update notification preferences")
     saved = getattr(result, "data", [])
-    return saved[0] if saved else preferences
+    result_preferences = saved[0] if saved else preferences
+    return {**result_preferences, "daily_digest_available": False}
 
 # =========================================================
 # BACKGROUND WORKER
@@ -219,7 +232,12 @@ def _record_pipeline_run(entity_id: str, status: str, stage: str, error: str | N
         logging.warning("Could not persist pipeline status for %s: %s", entity_id, e)
 
 
-async def run_analysis_pipeline(entity_id: str, brand_name: str, profile_type: str):
+async def run_analysis_pipeline(
+    entity_id: str,
+    brand_name: str,
+    profile_type: str,
+    social_handle: str | None = None,
+):
     """
     Executes the heavy scraping and Groq AI tasks in the background.
     Now properly asynchronous to prevent event-loop blocking.
@@ -232,11 +250,11 @@ async def run_analysis_pipeline(entity_id: str, brand_name: str, profile_type: s
         # YouTube/Twitter/Facebook are env-gated no-ops until their keys are set,
         # so this is safe to run today.
         _record_pipeline_run(entity_id, "running", "collecting_mentions")
-        await asyncio.to_thread(scrape_nigerian_news, entity_id, brand_name)
-        await asyncio.to_thread(scrape_social_media, entity_id, brand_name)
-        await asyncio.to_thread(scrape_youtube, entity_id, brand_name)
-        await asyncio.to_thread(scrape_twitter, entity_id, brand_name)
-        await asyncio.to_thread(scrape_facebook, entity_id, brand_name)
+        await asyncio.to_thread(scrape_nigerian_news, entity_id, brand_name, social_handle)
+        await asyncio.to_thread(scrape_social_media, entity_id, brand_name, social_handle)
+        await asyncio.to_thread(scrape_youtube, entity_id, brand_name, social_handle)
+        await asyncio.to_thread(scrape_twitter, entity_id, brand_name, social_handle)
+        await asyncio.to_thread(scrape_facebook, entity_id, brand_name, social_handle)
 
         # Fetch live web context using Tavily (natively async)
         _record_pipeline_run(entity_id, "running", "searching_web")
@@ -267,13 +285,18 @@ async def run_analysis_pipeline(entity_id: str, brand_name: str, profile_type: s
 # =========================================================
 
 @app.post("/sync/{entity_id}", dependencies=[Depends(verify_internal_key)])
-def sync_all_sources(entity_id: str, brand_name: str, place_id: str = "mock_mode"):
-    news_count = scrape_nigerian_news(entity_id, brand_name)
+def sync_all_sources(
+    entity_id: str,
+    brand_name: str,
+    place_id: str = "mock_mode",
+    social_handle: str | None = None,
+):
+    news_count = scrape_nigerian_news(entity_id, brand_name, social_handle)
     google_count = fetch_google_reviews(entity_id, place_id)
-    social_count = scrape_social_media(entity_id, brand_name)
-    youtube_count = scrape_youtube(entity_id, brand_name)
-    twitter_count = scrape_twitter(entity_id, brand_name)
-    facebook_count = scrape_facebook(entity_id, brand_name)
+    social_count = scrape_social_media(entity_id, brand_name, social_handle)
+    youtube_count = scrape_youtube(entity_id, brand_name, social_handle)
+    twitter_count = scrape_twitter(entity_id, brand_name, social_handle)
+    facebook_count = scrape_facebook(entity_id, brand_name, social_handle)
 
     return {
         "status": "Sync Complete",
@@ -291,6 +314,14 @@ def sync_all_sources(entity_id: str, brand_name: str, place_id: str = "mock_mode
 def trigger_analysis(entity_id: str = None, brand_name: str = None):
     result = analyze_and_store_sentiment(entity_id=entity_id, brand_name=brand_name)
     return {"status": "Analysis Complete", "mentions_scored": result}
+
+
+@app.post("/internal/reprocess-sentiment/{entity_id}", dependencies=[Depends(verify_internal_key)])
+def trigger_sentiment_reprocess(entity_id: str, limit: int = 100):
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 500")
+    result = reprocess_existing_sentiment(entity_id, limit=limit)
+    return {"status": "Reprocess Complete", **result}
 
 @app.post("/calculate-risk/{entity_id}", dependencies=[Depends(verify_internal_key)])
 def trigger_risk_calculation(entity_id: str):
@@ -312,6 +343,21 @@ async def create_new_entity(
     """
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Name cannot be empty")
+    if payload.profile_type not in VALID_PROFILE_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid profile type")
+
+    competitor_names = []
+    seen_competitors = set()
+    for raw_name in payload.competitors:
+        comp_name = raw_name.strip()
+        if not comp_name:
+            raise HTTPException(status_code=400, detail="Competitor names cannot be empty")
+        normalized = comp_name.casefold()
+        if normalized == payload.name.strip().casefold():
+            raise HTTPException(status_code=400, detail="An entity cannot be its own competitor")
+        if normalized not in seen_competitors:
+            seen_competitors.add(normalized)
+            competitor_names.append(comp_name)
 
     user_id = user.id
     user_email = user.email
@@ -328,12 +374,12 @@ async def create_new_entity(
     # 3. Insert primary entity with the new profile_type
     try:
         insert_payload = {
-            "name": payload.name,
+            "name": payload.name.strip(),
             "user_id": user_id,
             "profile_type": payload.profile_type,
         }
-        if payload.social_handle:
-            insert_payload["social_handle"] = payload.social_handle
+        if payload.social_handle and payload.social_handle.strip():
+            insert_payload["social_handle"] = payload.social_handle.strip()
 
         insert_response = supabase_admin.table("monitored_entities").insert(insert_payload).execute()
     except Exception as e:
@@ -350,8 +396,8 @@ async def create_new_entity(
     entity_id = new_entity["id"]
 
     # 4. Handle Competitors (If provided in the payload)
-    if payload.competitors:
-        for comp_name in payload.competitors:
+    if competitor_names:
+        for comp_name in competitor_names:
             try:
                 # Create the competitor entity owned by the same user so RLS
                 # scopes it correctly (no orphaned null-owner rows).
@@ -370,12 +416,18 @@ async def create_new_entity(
                 }).execute()
                 
                 # Trigger a separate background task to analyze the competitor
-                background_tasks.add_task(run_analysis_pipeline, comp_id, comp_name, payload.profile_type)
+                background_tasks.add_task(run_analysis_pipeline, comp_id, comp_name, payload.profile_type, None)
             except Exception as e:
                 logging.error("Failed to map competitor %s: %s", comp_name, str(e))
 
     # 5. Trigger primary pipeline in the background
-    background_tasks.add_task(run_analysis_pipeline, entity_id, payload.name, payload.profile_type)
+    background_tasks.add_task(
+        run_analysis_pipeline,
+        entity_id,
+        payload.name.strip(),
+        payload.profile_type,
+        payload.social_handle.strip() if payload.social_handle else None,
+    )
 
     return {"success": True, "entity_id": entity_id}
 
@@ -417,6 +469,28 @@ async def add_competitor(
     profile_type = primary_entity["profile_type"]
 
     try:
+        links = (
+            supabase_admin.table("competitor_links")
+            .select("competitor_entity_id")
+            .eq("primary_entity_id", entity_id)
+            .execute()
+        )
+        linked_ids = [row["competitor_entity_id"] for row in (links.data or [])]
+        if linked_ids:
+            linked_entities = (
+                supabase_admin.table("monitored_entities")
+                .select("id, name")
+                .in_("id", linked_ids)
+                .execute()
+            )
+            for linked in linked_entities.data or []:
+                if linked.get("name", "").strip().casefold() == comp_name.casefold():
+                    return {
+                        "success": True,
+                        "competitor_entity_id": linked["id"],
+                        "already_exists": True,
+                    }
+
         # Create the competitor entity owned by the same user so RLS scopes it
         # correctly (no orphaned null-owner rows).
         comp_insert = supabase_admin.table("monitored_entities").insert({
@@ -440,6 +514,66 @@ async def add_competitor(
         raise HTTPException(status_code=500, detail="Could not add competitor")
 
     return {"success": True, "competitor_entity_id": comp_id}
+
+
+@app.patch("/recommendations/{recommendation_id}/dismiss")
+def dismiss_recommendation(
+    recommendation_id: str,
+    payload: RecommendationDismissRequest,
+    user = Depends(verify_user),
+):
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Recommendation title cannot be empty")
+
+    try:
+        result = (
+            supabase_admin.table("recommendations")
+            .select("id, entity_id, action_plan")
+            .eq("id", recommendation_id)
+            .maybe_single()
+            .execute()
+        )
+        recommendation = getattr(result, "data", None)
+        if not recommendation:
+            raise HTTPException(status_code=404, detail="Recommendation not found")
+
+        owner = (
+            supabase_admin.table("monitored_entities")
+            .select("user_id")
+            .eq("id", recommendation["entity_id"])
+            .maybe_single()
+            .execute()
+        )
+        if not owner.data or owner.data.get("user_id") != user.id:
+            raise HTTPException(status_code=404, detail="Recommendation not found")
+
+        import json
+        try:
+            parsed = json.loads(recommendation.get("action_plan") or "{}")
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="This recommendation cannot be dismissed individually")
+        items = parsed.get("recommendations") if isinstance(parsed, dict) else None
+        if not isinstance(items, list):
+            raise HTTPException(status_code=400, detail="This recommendation cannot be dismissed individually")
+
+        matched = False
+        for item in items:
+            if isinstance(item, dict) and str(item.get("title", "")).strip() == title:
+                item["status"] = "dismissed"
+                matched = True
+        if not matched:
+            raise HTTPException(status_code=404, detail="Recommendation item not found")
+
+        supabase_admin.table("recommendations").update({
+            "action_plan": json.dumps({**parsed, "recommendations": items})
+        }).eq("id", recommendation_id).execute()
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error("Recommendation dismissal failed for %s: %s", recommendation_id, e)
+        raise HTTPException(status_code=500, detail="Could not dismiss recommendation")
 
 
 @app.patch("/entities/{entity_id}")
@@ -472,9 +606,7 @@ def update_entity(
             raise HTTPException(status_code=400, detail="Name cannot be empty")
     if "social_handle" in updates and updates["social_handle"] is not None:
         updates["social_handle"] = updates["social_handle"].strip() or None
-    if "profile_type" in updates and updates["profile_type"] not in {
-        "business", "influencer", "student", "real_estate"
-    }:
+    if "profile_type" in updates and updates["profile_type"] not in VALID_PROFILE_TYPES:
         raise HTTPException(status_code=400, detail="Invalid profile type")
 
     if not updates:

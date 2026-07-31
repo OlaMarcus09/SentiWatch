@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { motion, useReducedMotion } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import EntitySelector from '@/components/EntitySelector';
+import Link from 'next/link';
 import {
   Search,
   Bell,
@@ -40,6 +41,7 @@ export default function TopNavbar({
   const prefersReducedMotion = useReducedMotion();
   const [showProfile, setShowProfile] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [query, setQuery] = useState('');
   const profileRef = useRef<HTMLDivElement>(null);
 
   // Close the profile dropdown on outside click or Escape.
@@ -125,7 +127,14 @@ export default function TopNavbar({
               type="search"
               autoComplete="off"
               spellCheck={false}
-              placeholder="Search mentions, alerts, brands…"
+              placeholder="Search current alerts…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && query.trim()) {
+                  router.push(`/alerts?search=${encodeURIComponent(query.trim())}`);
+                }
+              }}
               className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus:border-transparent transition-colors"
             />
           </div>
@@ -151,10 +160,10 @@ export default function TopNavbar({
           <button
             type="button"
             aria-label="Notifications"
+            onClick={() => router.push('/alerts')}
             className="relative p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           >
             <Bell aria-hidden="true" className="w-5 h-5 text-slate-500" />
-            <span aria-hidden="true" className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
           </button>
 
           {/* Profile */}
@@ -185,28 +194,14 @@ export default function TopNavbar({
                   <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{userEmail || ''}</p>
                 </div>
                 <div className="p-2">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled
-                    aria-disabled="true"
-                    className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-400 dark:text-slate-500 rounded-lg cursor-not-allowed"
-                  >
+                  <Link href="/settings" role="menuitem" onClick={() => setShowProfile(false)} className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg">
                     <User aria-hidden="true" className="w-4 h-4" />
                     <span className="flex-1 text-left">Profile</span>
-                    <span className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 dark:bg-slate-700 rounded-full">Soon</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled
-                    aria-disabled="true"
-                    className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-400 dark:text-slate-500 rounded-lg cursor-not-allowed"
-                  >
+                  </Link>
+                  <Link href="/settings" role="menuitem" onClick={() => setShowProfile(false)} className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg">
                     <Settings aria-hidden="true" className="w-4 h-4" />
                     <span className="flex-1 text-left">Settings</span>
-                    <span className="px-2 py-0.5 text-[10px] font-medium bg-slate-100 dark:bg-slate-700 rounded-full">Soon</span>
-                  </button>
+                  </Link>
                   <button
                     type="button"
                     role="menuitem"

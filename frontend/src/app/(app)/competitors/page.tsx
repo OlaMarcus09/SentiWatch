@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Users, Plus, Loader2 } from 'lucide-react';
 import { useDashboard } from '@/components/providers/DashboardProvider';
 import CompetitorComparisonMatrix from '@/components/dashboard/CompetitorComparisonMatrix';
@@ -13,6 +13,19 @@ export default function CompetitorsPage() {
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    if (!currentEntity?.id) return;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await refreshCompetitors();
+      attempts += 1;
+      if (attempts < 24) timer = setTimeout(poll, 5000);
+    };
+    poll();
+    return () => { if (timer) clearTimeout(timer); };
+  }, [currentEntity?.id, refreshCompetitors]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();

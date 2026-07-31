@@ -37,7 +37,7 @@ jobs:
   run-pipeline:
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 55
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -61,4 +61,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+          # Covers both synchronous Apify actors plus the other source calls.
+          PIPELINE_SYNC_TIMEOUT: "300"
+          PIPELINE_ANALYZE_TIMEOUT: "180"
+          PIPELINE_RISK_TIMEOUT: "60"
         run: python cron_sync.py

@@ -37,14 +37,15 @@ def _insert_mention(entity_id: str, source: str, content: str, url: str) -> bool
 # ────────────────────────────────────────────────
 # Helper: Fetch RSS Feed (BRAND-SPECIFIC)
 # ────────────────────────────────────────────────
-def fetch_rss_feed(brand_name: str = None):
+def fetch_rss_feed(brand_name: str = None, social_handle: str = None):
     """
     Fetches Nigerian news RSS feed.
     🔥 FIX: Now uses search-specific URL to only fetch brand-relevant articles.
     """
-    if brand_name:
+    search_name = " ".join(filter(None, [brand_name, social_handle]))
+    if search_name:
         # Search for brand-specific articles
-        query = brand_name.replace(" ", "+")
+        query = search_name.replace(" ", "+")
         url = f"https://news.google.com/rss/search?q={query}&hl=en-NG&gl=NG&ceid=NG:en"
     else:
         # Fallback to general feed
@@ -78,12 +79,12 @@ def fetch_rss_feed(brand_name: str = None):
 # ────────────────────────────────────────────────
 # 1. Nigerian News Scraper (BRAND-ONLY)
 # ────────────────────────────────────────────────
-def scrape_nigerian_news(entity_id: str, brand_name: str) -> int:
+def scrape_nigerian_news(entity_id: str, brand_name: str, social_handle: str = None) -> int:
     """
     🔥 FIX: Now passes brand_name to fetch_rss_feed() for search-specific results.
     No more manual filtering — the RSS search does it for us!
     """
-    articles = fetch_rss_feed(brand_name)
+    articles = fetch_rss_feed(brand_name, social_handle)
     inserted_count = 0
     
     try:
@@ -151,13 +152,13 @@ def fetch_google_reviews(entity_id: str, place_id: str) -> int:
 # ────────────────────────────────────────────────
 # 3. Social Media Scraper (Reddit/X)
 # ────────────────────────────────────────────────
-def scrape_social_media(entity_id: str, brand_name: str) -> int:
+def scrape_social_media(entity_id: str, brand_name: str, social_handle: str = None) -> int:
     """
     Reddit — official public JSON search endpoint (upgrade from RSS).
     Pulls recent posts mentioning the brand; captures title + selftext and the
     permalink. No OAuth needed for low-volume public read.
     """
-    query = brand_name.replace(" ", "+")
+    query = (social_handle or brand_name).replace(" ", "+")
     url = f"https://www.reddit.com/search.json?q={query}&sort=new&limit=25"
     headers = {"User-Agent": "SentiWatch/1.0 (brand reputation monitor)"}
 
@@ -189,7 +190,7 @@ def scrape_social_media(entity_id: str, brand_name: str) -> int:
 # ────────────────────────────────────────────────
 # 4. YouTube Scraper (comments on brand-related videos)
 # ────────────────────────────────────────────────
-def scrape_youtube(entity_id: str, brand_name: str) -> int:
+def scrape_youtube(entity_id: str, brand_name: str, social_handle: str = None) -> int:
     """
     YouTube Data API v3. Searches videos for the brand, then pulls top-level
     comments. No-op returning 0 when YOUTUBE_API_KEY is unset.
@@ -205,7 +206,7 @@ def scrape_youtube(entity_id: str, brand_name: str) -> int:
             "https://www.googleapis.com/youtube/v3/search",
             params={
                 "part": "snippet",
-                "q": brand_name,
+                "q": social_handle or brand_name,
                 "type": "video",
                 "maxResults": 5,
                 "order": "date",
@@ -258,7 +259,7 @@ def scrape_youtube(entity_id: str, brand_name: str) -> int:
 # ────────────────────────────────────────────────
 # 5. Twitter / X Scraper (via Apify actor — disabled until APIFY_TOKEN set)
 # ────────────────────────────────────────────────
-def scrape_twitter(entity_id: str, brand_name: str) -> int:
+def scrape_twitter(entity_id: str, brand_name: str, social_handle: str = None) -> int:
     """
     X/Twitter has no free read API. This routes through an Apify actor and is a
     no-op until APIFY_TOKEN (and APIFY_TWITTER_ACTOR) are configured.
@@ -272,7 +273,7 @@ def scrape_twitter(entity_id: str, brand_name: str) -> int:
         return 0
 
     items = apify_client.run_actor(actor_id, {
-        "searchTerms": [brand_name],
+        "searchTerms": [social_handle or brand_name],
         "maxItems": 25,
     })
 
@@ -289,7 +290,7 @@ def scrape_twitter(entity_id: str, brand_name: str) -> int:
 # ────────────────────────────────────────────────
 # 6. Facebook Scraper (via Apify actor — disabled until APIFY_TOKEN set)
 # ────────────────────────────────────────────────
-def scrape_facebook(entity_id: str, brand_name: str) -> int:
+def scrape_facebook(entity_id: str, brand_name: str, social_handle: str = None) -> int:
     """
     Facebook exposes no free brand-mention search. Routes through an Apify actor
     and is a no-op until APIFY_TOKEN (and APIFY_FACEBOOK_ACTOR) are configured.
@@ -303,7 +304,7 @@ def scrape_facebook(entity_id: str, brand_name: str) -> int:
         return 0
 
     items = apify_client.run_actor(actor_id, {
-        "query": brand_name,
+        "query": social_handle or brand_name,
         "maxItems": 25,
     })
 

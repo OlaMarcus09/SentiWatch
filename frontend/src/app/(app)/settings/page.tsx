@@ -19,6 +19,7 @@ export default function SettingsPage() {
     theme,
     toggleTheme,
     refreshCompetitors,
+    updateCurrentEntity,
   } = useDashboard();
   const [name, setName] = useState('');
   const [profileType, setProfileType] = useState('business');
@@ -29,6 +30,7 @@ export default function SettingsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [emailAlerts, setEmailAlerts] = useState(true);
   const [dailyDigest, setDailyDigest] = useState(false);
+  const [dailyDigestAvailable, setDailyDigestAvailable] = useState(false);
   const [loadingPreferences, setLoadingPreferences] = useState(true);
 
   useEffect(() => {
@@ -46,13 +48,16 @@ export default function SettingsPage() {
       .then((preferences) => {
         if (!preferences) return;
         setEmailAlerts(preferences.email_alerts_enabled !== false);
-        setDailyDigest(preferences.daily_digest_enabled === true);
+        setDailyDigestAvailable(preferences.daily_digest_available === true);
+        setDailyDigest(preferences.daily_digest_available === true && preferences.daily_digest_enabled === true);
       })
       .catch(() => setMessage('Could not load notification preferences.'))
       .finally(() => setLoadingPreferences(false));
   }, [userToken]);
 
   const saveNotificationPreferences = async (nextEmail: boolean, nextDigest: boolean) => {
+    const previousEmail = emailAlerts;
+    const previousDigest = dailyDigest;
     setEmailAlerts(nextEmail);
     setDailyDigest(nextDigest);
     try {
@@ -64,6 +69,8 @@ export default function SettingsPage() {
       if (!response.ok) throw new Error('Preference update failed');
       setMessage('Notification preferences saved.');
     } catch {
+      setEmailAlerts(previousEmail);
+      setDailyDigest(previousDigest);
       setMessage('Could not save notification preferences. Please try again.');
     }
   };
@@ -79,6 +86,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ name, profile_type: profileType, social_handle: socialHandle || null }),
       });
       if (!response.ok) throw new Error('Update failed');
+      updateCurrentEntity({ name, profile_type: profileType, social_handle: socialHandle || null });
       setMessage('Profile settings saved.');
     } catch {
       setMessage('Could not save profile settings. Please try again.');
@@ -135,7 +143,7 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-6">
-          <Card hover={false} className="p-6"><div className="flex items-start gap-3"><Bell className="w-5 h-5 text-rose-500 mt-0.5" /><div><h2 className="font-semibold text-slate-900 dark:text-white">Alerts</h2><p className="text-xs text-slate-500 mt-1">Email alerts are sent when risk thresholds are crossed.</p><label className="flex items-center justify-between gap-4 mt-5 text-sm text-slate-600 dark:text-slate-300">Email notifications<input type="checkbox" disabled={loadingPreferences} checked={emailAlerts} onChange={(e) => saveNotificationPreferences(e.target.checked, dailyDigest)} className="h-4 w-4 accent-blue-600" /></label><label className="flex items-center justify-between gap-4 mt-4 text-sm text-slate-600 dark:text-slate-300">Daily digest<input type="checkbox" disabled={loadingPreferences} checked={dailyDigest} onChange={(e) => saveNotificationPreferences(emailAlerts, e.target.checked)} className="h-4 w-4 accent-blue-600" /></label><p className="text-[11px] text-slate-400 mt-3">Changes apply to future risk calculations.</p></div></div></Card>
+          <Card hover={false} className="p-6"><div className="flex items-start gap-3"><Bell className="w-5 h-5 text-rose-500 mt-0.5" /><div><h2 className="font-semibold text-slate-900 dark:text-white">Alerts</h2><p className="text-xs text-slate-500 mt-1">Email alerts are sent when risk thresholds are crossed.</p><label className="flex items-center justify-between gap-4 mt-5 text-sm text-slate-600 dark:text-slate-300">Email notifications<input type="checkbox" disabled={loadingPreferences} checked={emailAlerts} onChange={(e) => saveNotificationPreferences(e.target.checked, dailyDigest)} className="h-4 w-4 accent-blue-600" /></label><label className="flex items-center justify-between gap-4 mt-4 text-sm text-slate-600 dark:text-slate-300">Daily digest<span className="flex items-center gap-2"><input type="checkbox" disabled={loadingPreferences || !dailyDigestAvailable} checked={dailyDigest} onChange={(e) => saveNotificationPreferences(emailAlerts, e.target.checked)} className="h-4 w-4 accent-blue-600" />{!dailyDigestAvailable && <span className="text-[10px] text-slate-400">Coming soon</span>}</span></label><p className="text-[11px] text-slate-400 mt-3">Changes apply to future risk calculations.</p></div></div></Card>
           <Card hover={false} className="p-6"><div className="flex items-start gap-3"><Monitor className="w-5 h-5 text-slate-500 mt-0.5" /><div><h2 className="font-semibold text-slate-900 dark:text-white">Appearance</h2><p className="text-xs text-slate-500 mt-1">Choose how the dashboard looks on this device.</p><button type="button" onClick={toggleTheme} className="mt-4 w-full flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2.5 text-sm text-slate-700 dark:text-slate-200"><span>{theme === 'dark' ? 'Dark mode' : 'Light mode'}</span><span className="text-xs text-blue-600">Change</span></button></div></div></Card>
           <Card hover={false} className="p-6"><div className="flex items-start gap-3"><ShieldCheck className="w-5 h-5 text-blue-500 mt-0.5" /><div><h2 className="font-semibold text-slate-900 dark:text-white">Privacy & security</h2><p className="text-xs text-slate-500 mt-1">Your browser reads only data permitted by Supabase Row Level Security. Service credentials are never exposed to the frontend.</p></div></div></Card>
           {message && <p role="status" className="text-sm text-emerald-600 dark:text-emerald-400">{message}</p>}
