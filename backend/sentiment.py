@@ -150,6 +150,14 @@ _RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 def validate_ai_output(result: Dict[str, Any], text: str = "") -> Dict[str, Any]:
 
+    # Compatibility with the older gateway response field names.
+    if "sentiment" not in result and "sentiment_label" in result:
+        result["sentiment"] = result["sentiment_label"]
+    if "severity" not in result and "severity_score" in result:
+        result["severity"] = result["severity_score"]
+    if "risk" not in result and "risk_level" in result:
+        result["risk"] = result["risk_level"]
+
     raw_sentiment = str(result.get("sentiment", "neutral")).lower().strip()
     raw_risk = str(result.get("risk", "low")).lower().strip()
     raw_category = str(result.get("category", "general")).lower().strip()
@@ -173,7 +181,7 @@ def validate_ai_output(result: Dict[str, Any], text: str = "") -> Dict[str, Any]
         result["confidence"] = 0.75
 
     result["root_cause"] = str(result.get("root_cause", "No root cause identified")).strip()[:100]
-    result["reason"] = str(result.get("reason", "No reason provided")).strip()
+    result["reason"] = str(result.get("reason", result.get("recommendation", "No reason provided"))).strip()
 
     # Deterministic backstop: never let a hard negative signal sit as neutral
     # (or as a low-severity/low-risk negative). Scoring treats neutral as ZERO,

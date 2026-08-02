@@ -22,6 +22,7 @@ export default function InsightsPage() {
   const {
     positive,
     neutral,
+    unanalyzed,
     negative,
     categoryBreakdown,
     mentions,
@@ -50,6 +51,11 @@ export default function InsightsPage() {
             Sentiment Breakdown
           </h3>
           <SentimentChart positive={positive} neutral={neutral} negative={negative} />
+          {unanalyzed > 0 && (
+            <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
+              {unanalyzed} mention{unanalyzed === 1 ? '' : 's'} still awaiting sentiment analysis.
+            </p>
+          )}
         </Card>
         <Card hover={false}>
           <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">

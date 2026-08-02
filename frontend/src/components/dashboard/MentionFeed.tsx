@@ -58,7 +58,7 @@ export default function MentionFeed({ mentions }: MentionFeedProps) {
 
       <div className="divide-y divide-slate-200/60 dark:divide-slate-700/60 max-h-[500px] overflow-y-auto">
         {mentions.map((m, idx) => {
-          const sentiment = m.sentiment_results?.[0]?.label || 'neutral';
+          const sentiment = m.sentiment_results?.[0]?.label || 'pending';
           const category = m.sentiment_results?.[0]?.category || 'general';
           const severity = m.sentiment_results?.[0]?.severity || 0;
           const rootCause = m.sentiment_results?.[0]?.root_cause || '';
@@ -71,6 +71,8 @@ export default function MentionFeed({ mentions }: MentionFeedProps) {
               ? 'border-l-4 border-l-red-500'
               : sentiment === 'positive'
               ? 'border-l-4 border-l-green-500'
+              : sentiment === 'pending'
+              ? 'border-l-4 border-l-yellow-400'
               : 'border-l-4 border-l-slate-300 dark:border-l-slate-600';
 
           return (
@@ -145,13 +147,13 @@ export default function MentionFeed({ mentions }: MentionFeedProps) {
                         ? 'danger'
                         : sentiment === 'positive'
                         ? 'success'
-                        : 'default'
+                      : sentiment === 'pending' ? 'warning' : 'default'
                     }
                     className="flex items-center gap-1"
                   >
                     {sentiment === 'negative' && <AlertCircle className="w-3 h-3" />}
                     {sentiment === 'positive' && <CheckCircle className="w-3 h-3" />}
-                    {sentiment.toUpperCase()}
+                    {sentiment === 'pending' ? 'ANALYSIS PENDING' : sentiment.toUpperCase()}
                   </Badge>
                 </div>
               </div>

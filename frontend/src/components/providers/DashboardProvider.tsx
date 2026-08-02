@@ -54,6 +54,7 @@ interface DashboardContextValue {
   // Derived
   positive: number;
   neutral: number;
+  unanalyzed: number;
   negative: number;
   trendDelta: number | null;
   categoryBreakdown: Record<string, number>;
@@ -291,6 +292,19 @@ export default function DashboardProvider({
             );
           }
 
+          const currentRunIsNewerThanRisk = Boolean(
+            pipelineRun?.status === 'running' &&
+            (!latestRiskCreatedAt || (
+              pipelineRun.started_at &&
+              new Date(pipelineRun.started_at).getTime() >= new Date(latestRiskCreatedAt).getTime()
+            ))
+          );
+
+          if (currentRunIsNewerThanRisk && pollCount < MAX_POLLS) {
+            pollInterval = setTimeout(checkDataReady, 3000);
+            return;
+          }
+
           if (riskError) {
             console.error('Failed to load risk score:', riskError);
           }
@@ -368,9 +382,10 @@ export default function DashboardProvider({
   // ─── DERIVED VALUES ───
 
   // Calculate Sentiment Stats
-  let positive = 0, neutral = 0, negative = 0;
+  let positive = 0, neutral = 0, negative = 0, unanalyzed = 0;
   mentions.forEach((m) => {
-    const label = m.sentiment_results?.[0]?.label || 'neutral';
+    const label = m.sentiment_results?.[0]?.label;
+    if (!label) { unanalyzed++; return; }
     if (label === 'positive') positive++;
     else if (label === 'negative') negative++;
     else neutral++;
@@ -433,6 +448,7 @@ export default function DashboardProvider({
       previousRiskScore,
       positive,
       neutral,
+      unanalyzed,
       negative,
       trendDelta,
       categoryBreakdown,

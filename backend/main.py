@@ -435,12 +435,14 @@ async def run_analysis_pipeline(
 
         # Run the synchronous sentiment analyzer off the event loop
         _record_pipeline_run(entity_id, "running", "analyzing_sentiment", run_id=run_id, worker_token=worker_token)
-        await asyncio.to_thread(
+        analysis_result = await asyncio.to_thread(
             analyze_and_store_sentiment,
             entity_id,
             brand_name,
             live_context,
         )
+        if analysis_result.get("failed", 0):
+            raise RuntimeError(f"Sentiment analysis failed for {analysis_result['failed']} mention(s)")
 
         # Risk calculation is blocking (Supabase + Resend) -> offload
         _record_pipeline_run(entity_id, "running", "calculating_risk", run_id=run_id, worker_token=worker_token)
@@ -522,6 +524,10 @@ def trigger_analysis(
     )
     try:
         result = analyze_and_store_sentiment(entity_id=entity_id, brand_name=brand_name)
+        if result.get("failed", 0):
+            raise RuntimeError(
+                f"Sentiment analysis failed for {result['failed']} mention(s)"
+            )
     except Exception as exc:
         _record_pipeline_run(
             entity_id, "failed", "failed", str(exc)[:500],
@@ -727,13 +733,9 @@ async def create_new_entity(
                     logging.error("Primary entity rollback failed for %s: %s", entity_id, cleanup_error)
                 raise HTTPException(status_code=500, detail="Could not create entity and competitors")
 
-    # Queue provider work only after all database rows are valid.
-    for comp_id, comp_name in created_competitors:
-        background_tasks.add_task(
-            run_analysis_pipeline, comp_id, comp_name, payload.profile_type, None
-        )
-
-    # 5. Trigger primary pipeline in the background
+    # Queue the requested brand first. Starlette executes BackgroundTasks in
+    # order, so putting competitors first made the user wait for every
+    # competitor pipeline before their primary dashboard could become ready.
     background_tasks.add_task(
         run_analysis_pipeline,
         entity_id,
@@ -741,6 +743,12 @@ async def create_new_entity(
         payload.profile_type,
         payload.social_handle.strip() if payload.social_handle else None,
     )
+
+    # Queue provider work only after all database rows are valid.
+    for comp_id, comp_name in created_competitors:
+        background_tasks.add_task(
+            run_analysis_pipeline, comp_id, comp_name, payload.profile_type, None
+        )
 
     return {"success": True, "entity_id": entity_id}
 

@@ -24,46 +24,33 @@ The live Supabase project has passed these database checks:
 - No orphaned mention, risk-score, or recommendation records.
 - Ownership SELECT policies correctly scope rows through `auth.uid()`.
 
-## One live database action still required
+## Completed live database cleanup
 
-Two legacy policies were found with `WITH CHECK (true)`:
+The two legacy policies previously found with `WITH CHECK (true)` were removed
+from the live Supabase project:
 
 - `Allow backend to insert mentions`
 - `Allow backend to insert sentiment results`
 
-They permit direct browser inserts and are unnecessary because backend
-service-role writes bypass RLS. Run the cleanup below in Supabase:
-
-```sql
-begin;
-drop policy if exists "Allow backend to insert mentions" on public.mentions;
-drop policy if exists "Allow backend to insert sentiment results" on public.sentiment_results;
-commit;
-```
-
-Then verify this returns zero rows:
-
-```sql
-select tablename, policyname, with_check
-from pg_policies
-where schemaname = 'public'
-  and cmd = 'INSERT'
-  and tablename in ('mentions', 'sentiment_results');
-```
+They permitted direct browser inserts and were unnecessary because backend
+service-role writes bypass RLS. The cleanup was applied and the INSERT-policy
+verification returned zero rows.
 
 The corrected production migration and verification script enforce this for
 future environments.
 
-## Deployment sequence after the policy cleanup
+## Remaining deployment sequence
 
-1. Commit and push the reviewed production-readiness changes to `origin/main`.
-2. Deploy the Render backend and verify `GET /health/ready` returns HTTP 200.
-3. Deploy the Vercel frontend with the production Supabase/API variables.
-4. Manually run `Hourly Reputation Pipeline` in GitHub Actions.
-5. Manually run `Daily Reputation Digest` in GitHub Actions.
-6. Test entity creation, competitor creation, notification read actions,
+The reviewed production-readiness changes are pushed to `origin/main` at
+commit `06419c9`.
+
+1. Deploy the Render backend and verify `GET /health/ready` returns HTTP 200.
+2. Deploy the Vercel frontend with the production Supabase/API variables.
+3. Manually run `Hourly Reputation Pipeline` in GitHub Actions.
+4. Manually run `Daily Reputation Digest` in GitHub Actions.
+5. Test entity creation, competitor creation, notification read actions,
    settings persistence, pipeline recovery, and one complete risk calculation.
-7. Configure a verified Resend sending domain instead of relying on
+6. Configure a verified Resend sending domain instead of relying on
    `onboarding@resend.dev` for real customers.
 
 ## Important repository notes

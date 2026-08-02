@@ -143,6 +143,21 @@ class ReputationIntegrityTests(unittest.TestCase):
         self.assertGreaterEqual(result["severity"], 8)
         self.assertIn(result["risk"], {"high", "critical"})
 
+    def test_legacy_llm_fields_do_not_default_to_neutral(self):
+        result = sentiment.validate_ai_output({
+            "sentiment_label": "negative",
+            "category": "customer_complaint",
+            "severity_score": 7,
+            "confidence": 0.91,
+            "risk_level": "high",
+            "recommendation": "Investigate repeated transfer failures.",
+        })
+
+        self.assertEqual(result["sentiment"], "negative")
+        self.assertEqual(result["severity"], 7)
+        self.assertEqual(result["risk"], "high")
+        self.assertEqual(result["reason"], "Investigate repeated transfer failures.")
+
     def test_source_names_are_normalized_to_scoring_keys(self):
         self.assertEqual(risk_engine._normalise_source("Twitter/X"), "twitter")
         self.assertEqual(risk_engine._normalise_source("Reddit"), "reddit")
