@@ -43,7 +43,7 @@ def wait_for_backend(max_attempts: int = 10, delay: int = 8):
     """
     for attempt in range(1, max_attempts + 1):
         try:
-            r = requests.get(f"{BACKEND_URL}/", timeout=15)
+            r = requests.get(f"{BACKEND_URL}/health/ready", timeout=15)
             if r.status_code == 200:
                 logging.info(f"🌡️ Backend awake after {attempt} attempt(s).")
                 return True
@@ -55,8 +55,8 @@ def wait_for_backend(max_attempts: int = 10, delay: int = 8):
     return False
 
 
-def _post_stage(path: str, entity: dict, timeout: int) -> bool:
-    """Call one internal stage and return whether it completed successfully."""
+def _post_stage(path: str, entity: dict, timeout: int, pipeline: dict | None = None):
+    """Call one internal stage and return its JSON payload on success."""
     name = entity["name"]
     try:
         response = requests.post(
@@ -64,9 +64,13 @@ def _post_stage(path: str, entity: dict, timeout: int) -> bool:
             params={
                 "brand_name": name,
                 **({"social_handle": entity.get("social_handle")} if entity.get("social_handle") else {}),
+                **({"pipeline_run_id": pipeline["id"], "worker_token": pipeline["worker_token"]} if pipeline and path != f"/sync/{entity['id']}" else {}),
             } if path.startswith("/sync/") else (
-                {"entity_id": entity["id"], "brand_name": name}
-                if path == "/analyze" else None
+                {"entity_id": entity["id"], "brand_name": name, **({"pipeline_run_id": pipeline["id"], "worker_token": pipeline["worker_token"]} if pipeline else {})}
+                if path == "/analyze" else (
+                    {"pipeline_run_id": pipeline["id"], "worker_token": pipeline["worker_token"]}
+                    if pipeline and path.startswith("/calculate-risk/") else None
+                )
             ),
             headers=INTERNAL_HEADERS,
             timeout=timeout,
@@ -84,7 +88,10 @@ def _post_stage(path: str, entity: dict, timeout: int) -> bool:
             response.text[:300],
         )
         return False
-    return True
+    try:
+        return response.json()
+    except ValueError:
+        return {}
 
 
 def run_automated_pipeline():
@@ -107,9 +114,46 @@ def run_automated_pipeline():
         raise PipelineRunError("Backend is unavailable after warmup attempts")
 
     try:
+        recovered_entity_ids = set()
+        recovery_response = requests.post(
+            f"{BACKEND_URL}/internal/recover-pipelines",
+            params={"limit": 25},
+            headers=INTERNAL_HEADERS,
+            timeout=30,
+        )
+        if recovery_response.status_code != 200:
+            logging.warning(
+                "Pipeline recovery returned %s: %s",
+                recovery_response.status_code,
+                recovery_response.text[:300],
+            )
+        else:
+            recovery_payload = recovery_response.json()
+            recovered_entity_ids = set(recovery_payload.get("entity_ids") or [])
+            logging.info("Pipeline recovery: %s", recovery_payload)
+
         # 1. Fetch every monitored brand from the database
         entities_res = admin.table("monitored_entities").select("id, name, social_handle").execute()
-        entities = entities_res.data or []
+        entities = [
+            entity for entity in (entities_res.data or [])
+            if entity["id"] not in recovered_entity_ids
+        ]
+
+        # Do not launch a second run for an entity whose leased pipeline is
+        # still active (for example, when a prior hourly cycle exceeded an hour).
+        try:
+            active_runs = (
+                admin.table("pipeline_runs").select("entity_id")
+                .eq("status", "running")
+                .gt("lease_expires_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+                .execute()
+            ).data or []
+            active_ids = {run["entity_id"] for run in active_runs}
+            entities = [entity for entity in entities if entity["id"] not in active_ids]
+        except Exception as exc:
+            # Older deployments may not have pipeline_runs yet; the stage
+            # endpoints remain usable while the migration is rolled out.
+            logging.warning("Could not inspect active pipeline leases: %s", exc)
 
         if not entities:
             logging.info("No monitored entities found. Exiting.")
@@ -130,11 +174,18 @@ def run_automated_pipeline():
                 ("/analyze", ANALYZE_TIMEOUT, "analysis"),
                 (f"/calculate-risk/{entity_id}", RISK_TIMEOUT, "risk calculation"),
             )
+            pipeline = None
             for path, timeout, label in stages:
-                if not _post_stage(path, entity, timeout):
+                result = _post_stage(path, entity, timeout, pipeline)
+                if result is False:
                     logging.error("Stopping %s pipeline after failed %s", name, label)
                     summary.failed += 1
                     break
+                if path.startswith("/sync/") and result.get("pipeline_run_id"):
+                    pipeline = {
+                        "id": result["pipeline_run_id"],
+                        "worker_token": result.get("worker_token"),
+                    }
                 logging.info("Completed %s for %s", label, name)
             else:
                 summary.succeeded += 1

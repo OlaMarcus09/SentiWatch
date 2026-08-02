@@ -171,6 +171,14 @@ using (
 
 ## 5. Recommended next steps (not yet implemented)
 
+### Backend-only child writes
+
+`mentions` and `sentiment_results` must not have anon/authenticated INSERT
+policies using `WITH CHECK (true)`. The backend writes these rows with the
+service-role client, which bypasses RLS. The production-readiness migration
+drops the legacy policies named `Allow backend to insert mentions` and
+`Allow backend to insert sentiment results`.
+
 - **Rate limiting** on the internal + auth endpoints (e.g. slowapi) to curb
   brute force and quota abuse.
 - **Ownership check on internal routes:** `/sync`, `/analyze`,

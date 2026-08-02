@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any -- legacy Supabase rows lack generated types. */
 
 import {
   useCallback,
@@ -119,7 +120,7 @@ export default function DashboardProvider({
       return;
     }
     setCompetitorsData((data || []).map((link: any) => link.monitored_entities).filter(Boolean));
-  }, [currentEntity?.id]);
+  }, [currentEntity]);
 
   const updateCurrentEntity = useCallback((patch: Record<string, any>) => {
     setCurrentEntity((previous: any) => previous ? { ...previous, ...patch } : previous);
@@ -132,7 +133,7 @@ export default function DashboardProvider({
     const stored = typeof window !== 'undefined' ? localStorage.getItem('theme') : null;
     const isDark = stored ? stored === 'dark' : document.documentElement.classList.contains('dark');
     document.documentElement.classList.toggle('dark', isDark);
-    setTheme(isDark ? 'dark' : 'light');
+    queueMicrotask(() => setTheme(isDark ? 'dark' : 'light'));
   }, []);
 
   const toggleTheme = () => {
@@ -312,7 +313,8 @@ export default function DashboardProvider({
             .from('mentions')
             .select('*')
             .eq('entity_id', activeEntity.id)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(200);
 
           const mentionIds = (fetchedMentions || []).map((m: any) => m.id);
           const { data: sentimentRows } = mentionIds.length > 0

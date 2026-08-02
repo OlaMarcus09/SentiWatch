@@ -45,6 +45,7 @@ The frontend reads most dashboard data directly from Supabase using the authenti
 | `frontend/src/app` | Next.js routes and authenticated application screens |
 | `frontend/src/components/providers/DashboardProvider.tsx` | Session bootstrap, entity selection, competitor loading, pipeline polling, dashboard state |
 | `scripts/2026-07-30_reputation_integrity.sql` | Required database migration for deduplication, score history, and pipeline status |
+| `scripts/2026-07-31_pipeline_recovery.sql` | Pipeline leases/stale-run claims and normalized social mention metadata |
 | `.github/workflows/pipeline.yml` | Hourly scheduled pipeline and backend integrity tests |
 | `DEPLOY.md` / `SECURITY.md` | Deployment and security operating procedures |
 
@@ -123,6 +124,11 @@ All provider calls are environment-configured. LLM calls request JSON, retry up 
 
 Each analyzed mention contributes a signed score based on sentiment, severity, confidence, source credibility, category, AI risk level, and recency. Negative sentiment increases risk; positive sentiment reduces it. Volume multipliers and normalization produce the final 0–100 score and status (`healthy`, `watch`, `elevated`, `high`, or `critical`).
 
+Live scores use a bounded evidence window (`SCORING_WINDOW_DAYS`, 90 by
+default) and a bounded input size (`MAX_SCORING_MENTIONS`, 500 by default).
+Tavily context is stored once per entity per UTC day so scheduled searches do
+not inflate mention volume with repeated snapshots of the same coverage.
+
 Risk calculation persists the score snapshot, then asks the LLM for 3–5 prioritized recommendations. If that call fails, a deterministic persona-specific playbook is stored instead. Email delivery is a side effect and does not replace persistence of the score or recommendation.
 
 ## Reliability characteristics
@@ -140,9 +146,9 @@ Already implemented:
 
 Current limitations:
 
-- FastAPI `BackgroundTasks` are in-process and can be interrupted by a Render restart or deploy; `pipeline_runs` records state but does not resume work.
+- FastAPI `BackgroundTasks` remain in-process, but interrupted jobs carry leases and are reclaimed by the hourly scheduler. This is resumable execution, not a fully independent worker queue.
 - `/sync`, `/analyze`, and `/calculate-risk` trust possession of the shared internal key and do not independently verify entity ownership.
-- The cron's anon entity listing can return zero rows under strict RLS.
+- Scheduled entity inventory uses the service-role client and fails closed when the key is missing.
 - No application-level rate limiting, circuit breaker, or provider quota budget is implemented.
 - Database migrations are applied manually; deployment does not yet validate schema compatibility automatically.
 - Source adapters vary in completeness and freshness; several are intentionally disabled until provider credentials exist.
@@ -151,8 +157,7 @@ Current limitations:
 ## Next hardening sequence
 
 1. **Verify and lock down Supabase RLS in production.** Confirm RLS is enabled on all tenant tables and test cross-user reads/writes, especially `competitor_links`, `pipeline_runs`, and child tables.
-2. **Fix cron tenancy.** Use a service-role read path for the scheduled entity inventory, or create a narrowly scoped backend endpoint that returns only processable entities. Do not depend on an unauthenticated anon query under user-scoped RLS.
-3. **Make pipeline execution durable.** Move long-running analysis to a queue/worker or resumable job table with leases, idempotency keys, retries, and stale-run recovery. Keep `pipeline_runs` as the user-visible status projection.
+2. **Move recovery to a dedicated worker when scale requires it.** Lease-based stale-run recovery now prevents permanently lost jobs; a queue worker remains the next step for higher throughput and strict execution guarantees.
 4. **Add rate limits and operational telemetry.** Protect JWT and internal routes, record provider latency/error counts, and alert on repeated failed runs or quota exhaustion.
 5. **Automate schema and dependency checks.** Run migrations in a controlled release step and add `pip-audit`, `npm audit`, and type/lint checks to CI.
 6. **Expand source coverage safely.** Replace mock/disabled adapters with credentialed integrations, normalize source metadata, and add fixture-based scraper tests.
@@ -167,4 +172,5 @@ SentiWatch is ready for broader production use when a tenant cannot access anoth
 - Deployment: [`DEPLOY.md`](DEPLOY.md)
 - Security and RLS checklist: [`SECURITY.md`](SECURITY.md)
 - Integrity migration: [`scripts/2026-07-30_reputation_integrity.sql`](scripts/2026-07-30_reputation_integrity.sql)
+- Recovery and source metadata migration: [`scripts/2026-07-31_pipeline_recovery.sql`](scripts/2026-07-31_pipeline_recovery.sql)
 - Backend integrity tests: [`backend/tests/test_reputation_integrity.py`](backend/tests/test_reputation_integrity.py)

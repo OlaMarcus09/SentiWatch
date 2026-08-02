@@ -137,6 +137,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
           entities={allEntities}
           userName={displayName}
           userEmail={displayEmail}
+          userToken={userToken}
         />
 
         <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8 space-y-6 md:space-y-8">

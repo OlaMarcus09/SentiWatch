@@ -1,5 +1,31 @@
 # SentiWatch Deployment (Render + GitHub Actions)
 
+## Production release gate
+
+For a new Supabase project, apply `scripts/0001_baseline_schema.sql` first.
+For every environment, apply all dated migrations in filename order. The
+production-readiness migration is backward-compatible with installations that
+missed the optional metadata or notification migrations. Then run the read-only
+`scripts/verify_production_schema.sql` report. Do not deploy unless every
+listed tenant table has RLS enabled, the expected policies and indexes are
+present, and the integrity query returns zero rows.
+
+If an earlier production-readiness attempt failed, PostgreSQL rolled back the
+transaction. Pull the corrected migration and rerun the complete file.
+
+Required production configuration now also includes:
+
+- `ALLOWED_ORIGINS` — comma-separated exact frontend origins.
+- `SCORING_WINDOW_DAYS` — defaults to 90.
+- `MAX_SCORING_MENTIONS` — defaults to 500 per entity calculation.
+- `MAX_ENTITIES_PER_USER` — defaults to 10, including competitor entities.
+- `MAX_COMPETITORS_PER_ENTITY` — defaults to 3.
+- `USER_MUTATION_LIMIT_PER_MINUTE` — defaults to 10.
+
+After deployment, `GET /health/ready` must return HTTP 200. The endpoint fails
+closed when the service-role key, internal key, LLM provider, or database is
+not ready.
+
 Before deploying the reputation-integrity update, run
 `scripts/2026-07-30_reputation_integrity.sql` once in the Supabase SQL editor.
 It enables entity-scoped mention deduplication, risk-score history, and durable
@@ -7,9 +33,17 @@ background-pipeline status reporting.
 
 Run `scripts/2026-07-31_notification_preferences.sql` as well to enable the
 persisted email-alert and daily-digest controls in Settings.
+Run `scripts/2026-07-31_notification_delivery.sql` to create the in-app
+notification inbox and daily-digest delivery cursor. Schedule a daily request
+to `POST /internal/send-daily-digests` with the `X-Internal-Key` header.
 
 Run `scripts/2026-07-31_backend_hardening.sql` to enable owned recommendation
 reads and enforce unique competitor links before deploying this hardening pass.
+
+Run `scripts/2026-07-31_pipeline_recovery.sql` before deploying pipeline
+recovery and enriched social connectors. It adds pipeline leases/retry metadata,
+an atomic service-role recovery claim, and the structured mention metadata
+columns used by Reddit, YouTube, X, Facebook, and news ingestion.
 
 Railway's trial expired, so the backend now runs on **Render's free tier**
 (no credit card, never expires) and the hourly pipeline runs as a **free
@@ -56,6 +90,10 @@ All are marked `sync: false` in `render.yaml`, so you must enter the real values
 | `ENABLE_MOCK_REVIEWS` | no | Leave `false` in prod |
 | `GROQ_MODEL` | no | Defaults to `llama-3.3-70b-versatile` |
 | `ALERT_EMAIL_FALLBACK` | no | Defaults to `onboarding@resend.dev` |
+| `YOUTUBE_API_KEY` | no | Enables YouTube video/comment collection |
+| `APIFY_TOKEN` | no | Enables configured X/Facebook Apify actors |
+| `APIFY_TWITTER_ACTOR` | no | Apify actor id for X/Twitter collection |
+| `APIFY_FACEBOOK_ACTOR` | no | Apify actor id for Facebook collection |
 
 ### 3. Generate `INTERNAL_API_KEY`
 ```bash

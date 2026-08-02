@@ -7,6 +7,13 @@ Changing a value here automatically affects the
 entire scoring engine.
 """
 
+import os
+
+# Bound the evidence used by each live score. Otherwise scheduled collection
+# lets old incidents and mention-volume multipliers accumulate forever.
+SCORING_WINDOW_DAYS = max(1, int(os.getenv("SCORING_WINDOW_DAYS", "90")))
+MAX_SCORING_MENTIONS = max(20, int(os.getenv("MAX_SCORING_MENTIONS", "500")))
+
 # ----------------------------------------------------
 # Source credibility weights
 # ----------------------------------------------------

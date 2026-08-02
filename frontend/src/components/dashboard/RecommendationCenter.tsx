@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any -- recommendation JSON has legacy payload variants. */
 
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
@@ -237,7 +238,7 @@ export default function RecommendationCenter({ recommendation, score, userToken 
           </div>
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">No recommendations yet</h3>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md">
-            We'll generate personalized recommendations once we have enough brand mentions.
+            We&apos;ll generate personalized recommendations once we have enough brand mentions.
           </p>
         </div>
       </Card>

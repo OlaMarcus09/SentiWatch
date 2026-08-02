@@ -31,11 +31,29 @@ services:
         sync: false
       - key: INTERNAL_API_KEY
         sync: false
+      - key: ALLOWED_ORIGINS
+        value: "https://senti-watch.vercel.app"
+      - key: ALERT_COOLDOWN_HOURS
+        value: "6"
+      - key: PIPELINE_LEASE_SECONDS
+        value: "900"
+      - key: SCORING_WINDOW_DAYS
+        value: "90"
+      - key: MAX_SCORING_MENTIONS
+        value: "500"
+      - key: MAX_ENTITIES_PER_USER
+        value: "10"
+      - key: MAX_COMPETITORS_PER_ENTITY
+        value: "3"
+      - key: USER_MUTATION_LIMIT_PER_MINUTE
+        value: "10"
       - key: APIFY_TOKEN
         sync: false
       - key: APIFY_TWITTER_ACTOR
         sync: false
       - key: APIFY_FACEBOOK_ACTOR
+        sync: false
+      - key: YOUTUBE_API_KEY
         sync: false
       # Leave unset (or "false") in production so no mock data is written.
       - key: ENABLE_MOCK_REVIEWS

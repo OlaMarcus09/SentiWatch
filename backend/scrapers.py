@@ -3,35 +3,115 @@ import logging
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from database import supabase_admin
 from constants import SOURCE_WEIGHTS
 from services import apify_client
 
 
-def _insert_mention(entity_id: str, source: str, content: str, url: str) -> bool:
+def _normalise_timestamp(value):
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+        parsed = parsedate_to_datetime(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).isoformat()
+        except ValueError:
+            return None
+
+
+def _metadata_schema_missing(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "source_comment_id",
+            "source_post_id",
+            "raw_metadata",
+            "published_at",
+            "engagement",
+            "platform",
+            "schema cache",
+        )
+    )
+
+
+def _insert_mention(
+    entity_id: str,
+    source: str,
+    content: str,
+    url: str,
+    *,
+    platform: str | None = None,
+    source_post_id: str | None = None,
+    source_comment_id: str | None = None,
+    author_name: str | None = None,
+    author_handle: str | None = None,
+    engagement: dict | None = None,
+    published_at=None,
+    raw_metadata: dict | None = None,
+) -> bool:
     """
     Dedup by entity + URL. The same article can legitimately mention multiple
     tracked entities, so URL-only deduplication loses data for later entities.
     Shared by all social scrapers so they behave identically.
     """
-    if not content or not url:
+    if not content or not (url or source_comment_id or source_post_id):
         return False
-    exists = (
-        supabase_admin.table("mentions")
-        .select("id")
-        .eq("entity_id", entity_id)
-        .eq("url", url)
-        .execute()
-    )
+    lookup = supabase_admin.table("mentions").select("id").eq("entity_id", entity_id)
+    if source_comment_id and platform:
+        lookup = lookup.eq("platform", platform).eq("source_comment_id", source_comment_id)
+    elif url:
+        lookup = lookup.eq("url", url)
+    else:
+        lookup = lookup.eq("platform", platform).eq("source_post_id", source_post_id)
+    try:
+        exists = lookup.execute()
+    except Exception as exc:
+        # Safe rolling deploy: old schemas can continue URL deduplication until
+        # the recovery/source-metadata migration has been applied.
+        if not url or not _metadata_schema_missing(exc):
+            raise
+        exists = (
+            supabase_admin.table("mentions")
+            .select("id")
+            .eq("entity_id", entity_id)
+            .eq("url", url)
+            .execute()
+        )
     if exists.data:
         return False
-    supabase_admin.table("mentions").insert({
+    payload = {
         "entity_id": entity_id,
         "source": source,
         "content": content[:2000],
         "url": url,
         "created_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
+        "platform": platform or source,
+        "source_post_id": str(source_post_id) if source_post_id else None,
+        "source_comment_id": str(source_comment_id) if source_comment_id else None,
+        "author_name": author_name,
+        "author_handle": author_handle,
+        "engagement": engagement or {},
+        "published_at": _normalise_timestamp(published_at),
+        "raw_metadata": raw_metadata or {},
+    }
+    try:
+        supabase_admin.table("mentions").insert(payload).execute()
+    except Exception as exc:
+        if not _metadata_schema_missing(exc):
+            raise
+        legacy_payload = {
+            key: payload[key]
+            for key in ("entity_id", "source", "content", "url", "created_at")
+        }
+        supabase_admin.table("mentions").insert(legacy_payload).execute()
     return True
 
 # ────────────────────────────────────────────────
@@ -93,7 +173,10 @@ def scrape_nigerian_news(entity_id: str, brand_name: str, social_handle: str = N
             link = article.get('link', '')
             
             # Check if already exists
-            if _insert_mention(entity_id, "Nigerian News Feed", title, link):
+            if _insert_mention(
+                entity_id, "Nigerian News Feed", title, link,
+                platform="news", published_at=article.get("published"),
+            ):
                 inserted_count += 1
         
         return inserted_count
@@ -178,7 +261,22 @@ def scrape_social_media(entity_id: str, brand_name: str, social_handle: str = No
             permalink = post.get("permalink", "")
             link = f"https://www.reddit.com{permalink}" if permalink else post.get("url", "")
 
-            if _insert_mention(entity_id, "Reddit", content, link):
+            if _insert_mention(
+                entity_id,
+                "Reddit",
+                content,
+                link,
+                platform="reddit",
+                source_post_id=post.get("id"),
+                author_handle=post.get("author"),
+                engagement={
+                    "score": post.get("score", 0),
+                    "comments": post.get("num_comments", 0),
+                    "upvote_ratio": post.get("upvote_ratio"),
+                },
+                published_at=post.get("created_utc"),
+                raw_metadata={"subreddit": post.get("subreddit")},
+            ):
                 inserted_count += 1
 
         return inserted_count
@@ -247,7 +345,19 @@ def scrape_youtube(entity_id: str, brand_name: str, social_handle: str = None) -
                 text = snippet.get("textDisplay", "") or ""
                 comment_id = top.get("id", "")
                 link = f"https://www.youtube.com/watch?v={vid}&lc={comment_id}" if comment_id else ""
-                if _insert_mention(entity_id, "YouTube", text, link):
+                if _insert_mention(
+                    entity_id,
+                    "YouTube",
+                    text,
+                    link,
+                    platform="youtube",
+                    source_post_id=vid,
+                    source_comment_id=comment_id,
+                    author_name=snippet.get("authorDisplayName"),
+                    author_handle=snippet.get("authorChannelId", {}).get("value"),
+                    engagement={"likes": snippet.get("likeCount", 0)},
+                    published_at=snippet.get("publishedAt"),
+                ):
                     inserted_count += 1
 
         return inserted_count
@@ -282,7 +392,23 @@ def scrape_twitter(entity_id: str, brand_name: str, social_handle: str = None) -
         # Actor field names vary; try the common ones.
         text = it.get("text") or it.get("full_text") or it.get("content") or ""
         link = it.get("url") or it.get("twitterUrl") or it.get("tweetUrl") or ""
-        if _insert_mention(entity_id, "Twitter/X", text, link):
+        tweet_id = it.get("id") or it.get("tweetId") or it.get("id_str")
+        if _insert_mention(
+            entity_id,
+            "Twitter/X",
+            text,
+            link,
+            platform="twitter",
+            source_post_id=tweet_id,
+            author_name=it.get("authorName") or it.get("user", {}).get("name"),
+            author_handle=it.get("author") or it.get("username") or it.get("user", {}).get("screen_name"),
+            engagement={
+                "likes": it.get("likeCount", it.get("favorite_count", 0)),
+                "replies": it.get("replyCount", it.get("reply_count", 0)),
+                "reposts": it.get("retweetCount", it.get("retweet_count", 0)),
+            },
+            published_at=it.get("createdAt") or it.get("created_at"),
+        ):
             inserted_count += 1
     return inserted_count
 
@@ -312,6 +438,22 @@ def scrape_facebook(entity_id: str, brand_name: str, social_handle: str = None) 
     for it in items:
         text = it.get("text") or it.get("message") or it.get("content") or ""
         link = it.get("url") or it.get("postUrl") or it.get("facebookUrl") or ""
-        if _insert_mention(entity_id, "Facebook", text, link):
+        post_id = it.get("postId") or it.get("id")
+        if _insert_mention(
+            entity_id,
+            "Facebook",
+            text,
+            link,
+            platform="facebook",
+            source_post_id=post_id,
+            author_name=it.get("userName") or it.get("authorName") or it.get("pageName"),
+            author_handle=it.get("userId") or it.get("pageId"),
+            engagement={
+                "likes": it.get("likes", it.get("likesCount", 0)),
+                "comments": it.get("comments", it.get("commentsCount", 0)),
+                "shares": it.get("shares", it.get("sharesCount", 0)),
+            },
+            published_at=it.get("time") or it.get("timestamp") or it.get("date"),
+        ):
             inserted_count += 1
     return inserted_count

@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any -- provider metadata varies by source. */
 
 import { useState } from 'react';
 import { useDashboard } from '@/components/providers/DashboardProvider';

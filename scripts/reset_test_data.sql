@@ -1,7 +1,7 @@
 -- SentiWatch: reset test data ("Data + entities" scope)
 -- Keeps: auth.users (login), users, profiles
 -- Wipes: monitored_entities, competitor_links, mentions, sentiment_results,
---        risk_scores, recommendations, pipeline_runs
+--        risk_scores, recommendations, pipeline_runs, notifications
 --
 -- Run in Supabase Dashboard → SQL Editor. Review the BEFORE counts,
 -- then let the transaction commit. If anything looks wrong, it rolls back.
@@ -15,12 +15,14 @@ UNION ALL SELECT 'mentions',           count(*) FROM mentions
 UNION ALL SELECT 'sentiment_results',  count(*) FROM sentiment_results
 UNION ALL SELECT 'risk_scores',        count(*) FROM risk_scores
 UNION ALL SELECT 'pipeline_runs',      count(*) FROM pipeline_runs
+UNION ALL SELECT 'notifications',      count(*) FROM notifications
 UNION ALL SELECT 'recommendations',    count(*) FROM recommendations;
 
 -- ── DELETE in FK-safe order: children first, parents last ──
 -- sentiment_results → mentions (mention_id)
 DELETE FROM sentiment_results;
 DELETE FROM pipeline_runs;
+DELETE FROM notifications;
 
 -- these all reference monitored_entities (entity_id)
 DELETE FROM mentions;
@@ -38,6 +40,7 @@ UNION ALL SELECT 'mentions',           count(*) FROM mentions
 UNION ALL SELECT 'sentiment_results',  count(*) FROM sentiment_results
 UNION ALL SELECT 'risk_scores',        count(*) FROM risk_scores
 UNION ALL SELECT 'pipeline_runs',      count(*) FROM pipeline_runs
+UNION ALL SELECT 'notifications',      count(*) FROM notifications
 UNION ALL SELECT 'recommendations',    count(*) FROM recommendations;
 
 -- Confirm login/account data is untouched (should be > 0 if you have accounts)

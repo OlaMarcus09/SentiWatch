@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any -- provider metadata varies by source. */
 
 import { motion } from 'framer-motion';
 import Card from '../ui/Card';
@@ -6,7 +7,6 @@ import Badge from '../ui/Badge';
 import {
   Globe,
   MessageSquare,
-  Newspaper,
   AlertCircle,
   CheckCircle,
   Clock,
@@ -39,7 +39,7 @@ export default function MentionFeed({ mentions }: MentionFeedProps) {
           </div>
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">No mentions yet</h3>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            We'll start tracking mentions as soon as we find them.
+            We&apos;ll start tracking mentions as soon as we find them.
           </p>
         </div>
       </Card>

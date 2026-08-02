@@ -29,6 +29,7 @@ import risk_engine  # noqa: E402
 import scrapers  # noqa: E402
 import scoring  # noqa: E402
 import sentiment  # noqa: E402
+import main as api_main  # noqa: E402
 
 
 class QueryDouble:
@@ -44,6 +45,20 @@ class QueryDouble:
         self.filters.append((column, value))
         return self
 
+    def gte(self, column, value):
+        self.filters.append((f"{column}__gte", value))
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
+    def in_(self, column, value):
+        self.filters.append((f"{column}__in", value))
+        return self
+
     def insert(self, payload):
         self.inserted = payload
         return self
@@ -53,6 +68,18 @@ class QueryDouble:
 
 
 class ReputationIntegrityTests(unittest.TestCase):
+    def test_authorization_header_requires_bearer_scheme(self):
+        with self.assertRaises(api_main.HTTPException) as context:
+            api_main.verify_user("Basic token")
+        self.assertEqual(context.exception.status_code, 401)
+
+    def test_entity_payload_rejects_more_than_three_competitors(self):
+        with self.assertRaises(Exception):
+            api_main.BrandCreateRequest(
+                name="Example",
+                competitors=["A", "B", "C", "D"],
+            )
+
     def test_mention_deduplication_is_scoped_to_entity(self):
         lookup = QueryDouble(data=[])
         insert = QueryDouble(data=[])
@@ -68,6 +95,34 @@ class ReputationIntegrityTests(unittest.TestCase):
         self.assertIn(("entity_id", "entity-a"), lookup.filters)
         self.assertIn(("url", "https://example.com/post"), lookup.filters)
         self.assertEqual(insert.inserted["entity_id"], "entity-a")
+
+    def test_social_mention_preserves_stable_source_metadata(self):
+        lookup = QueryDouble(data=[])
+        insert = QueryDouble(data=[])
+        admin = MagicMock()
+        admin.table.side_effect = [lookup, insert]
+
+        with patch.object(scrapers, "supabase_admin", admin):
+            created = scrapers._insert_mention(
+                "entity-a",
+                "YouTube",
+                "A customer comment",
+                "https://youtube.example/watch?v=video-1&lc=comment-1",
+                platform="youtube",
+                source_post_id="video-1",
+                source_comment_id="comment-1",
+                author_name="Customer",
+                engagement={"likes": 4},
+                published_at="2026-07-31T10:00:00Z",
+            )
+
+        self.assertTrue(created)
+        self.assertIn(("platform", "youtube"), lookup.filters)
+        self.assertIn(("source_comment_id", "comment-1"), lookup.filters)
+        self.assertEqual(insert.inserted["source_post_id"], "video-1")
+        self.assertEqual(insert.inserted["author_name"], "Customer")
+        self.assertEqual(insert.inserted["engagement"], {"likes": 4})
+        self.assertEqual(insert.inserted["published_at"], "2026-07-31T10:00:00+00:00")
 
     def test_hard_negative_signal_cannot_be_neutral(self):
         result = sentiment.validate_ai_output(
@@ -92,6 +147,31 @@ class ReputationIntegrityTests(unittest.TestCase):
         self.assertEqual(risk_engine._normalise_source("Twitter/X"), "twitter")
         self.assertEqual(risk_engine._normalise_source("Reddit"), "reddit")
         self.assertEqual(risk_engine._normalise_source("tavily_live_search"), "nigerian_news")
+
+    def test_risk_fetch_uses_bounded_recent_window(self):
+        mentions = QueryDouble(data=[])
+        admin = MagicMock()
+        admin.table.return_value = mentions
+
+        with patch.object(risk_engine, "supabase_admin", admin):
+            rows = risk_engine.fetch_mentions("entity-a")
+
+        self.assertEqual(rows, [])
+        self.assertIn(("entity_id", "entity-a"), mentions.filters)
+        self.assertTrue(any(key == "created_at__gte" for key, _value in mentions.filters))
+
+    def test_unprocessed_lookup_scopes_processed_ids_to_candidates(self):
+        candidates = QueryDouble(data=[{"id": "mention-a", "status": None}])
+        processed = QueryDouble(data=[])
+        admin = MagicMock()
+        admin.table.side_effect = [candidates, processed]
+
+        with patch.object(sentiment, "supabase_admin", admin):
+            rows = sentiment.get_unprocessed_mentions("entity-a", limit=20)
+
+        self.assertEqual([row["id"] for row in rows], ["mention-a"])
+        self.assertIn(("entity_id", "entity-a"), candidates.filters)
+        self.assertIn(("mention_id__in", ["mention-a"]), processed.filters)
 
     def test_positive_mentions_reduce_aggregate_risk(self):
         now = datetime.now(timezone.utc).isoformat()
@@ -150,6 +230,14 @@ class ReputationIntegrityTests(unittest.TestCase):
             )
 
         self.assertFalse(sent)
+
+    def test_alert_event_allows_status_escalation(self):
+        self.assertTrue(risk_engine.is_alert_event(
+            {"score": 82, "status": "critical"}, previous_score=68, previous_status="high"
+        ))
+        self.assertFalse(risk_engine.is_alert_event(
+            {"score": 75, "status": "high"}, previous_score=68, previous_status="high"
+        ))
 
 
 if __name__ == "__main__":

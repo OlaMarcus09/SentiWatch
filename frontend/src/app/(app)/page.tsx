@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any -- provider metadata varies by source. */
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';

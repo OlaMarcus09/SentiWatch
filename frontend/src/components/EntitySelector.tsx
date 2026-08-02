@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any -- entity rows are not generated yet. */
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 

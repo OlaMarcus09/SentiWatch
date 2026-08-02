@@ -1,13 +1,16 @@
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends, Request
 from services.search_service import fetch_entity_context
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
+from collections import defaultdict, deque
+from threading import Lock
 import os
 import asyncio
 import secrets
+import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from supabase import create_client, Client
 
 from database import supabase, supabase_admin
@@ -20,7 +23,7 @@ from scrapers import (
     scrape_facebook,
 )
 from sentiment import analyze_and_store_sentiment, reprocess_existing_sentiment
-from risk_engine import calculate_risk_and_alert
+from risk_engine import calculate_risk_and_alert, send_daily_digests
 
 # PIVOT TODO: Import your new search service here once you create the file
 # from services.search_service import fetch_entity_context
@@ -31,37 +34,53 @@ from risk_engine import calculate_risk_and_alert
 
 app = FastAPI(title="SentiWatch API - SaaS Version")
 
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,https://senti-watch.vercel.app",
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://senti-watch.vercel.app",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
 
 # =========================================================
 # REQUEST MODELS
 # =========================================================
 
 class BrandCreateRequest(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
     # New Pivot Fields
     profile_type: str = "business"  # e.g., student, influencer, business, real_estate
-    social_handle: Optional[str] = None  # e.g., @gtbank
-    competitors: List[str] = Field(default_factory=list)
+    social_handle: Optional[str] = Field(default=None, max_length=120)  # e.g., @gtbank
+    competitors: List[str] = Field(default_factory=list, max_length=3)
 
 
 class CompetitorAddRequest(BaseModel):
-    name: str  # Competitor name to link to an existing entity
+    name: str = Field(min_length=1, max_length=120)
 
 
 class EntityUpdateRequest(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=120)
     profile_type: Optional[str] = None
-    social_handle: Optional[str] = None
+    social_handle: Optional[str] = Field(default=None, max_length=120)
 
 
 class NotificationPreferencesRequest(BaseModel):
@@ -70,10 +89,15 @@ class NotificationPreferencesRequest(BaseModel):
 
 
 class RecommendationDismissRequest(BaseModel):
-    title: str
+    title: str = Field(min_length=1, max_length=120)
 
 
 VALID_PROFILE_TYPES = {"business", "influencer", "student", "real_estate"}
+MAX_ENTITIES_PER_USER = max(1, int(os.getenv("MAX_ENTITIES_PER_USER", "10")))
+MAX_COMPETITORS_PER_ENTITY = max(1, int(os.getenv("MAX_COMPETITORS_PER_ENTITY", "3")))
+USER_MUTATION_LIMIT_PER_MINUTE = max(1, int(os.getenv("USER_MUTATION_LIMIT_PER_MINUTE", "10")))
+_mutation_windows = defaultdict(deque)
+_mutation_lock = Lock()
 
 # =========================================================
 # AUTH DEPENDENCIES
@@ -103,7 +127,10 @@ def verify_user(authorization: str | None = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
 
-    token = authorization.replace("Bearer ", "").strip()
+    scheme, separator, token = authorization.partition(" ")
+    if separator != " " or scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid Authorization header")
+    token = token.strip()
     if not token:
         raise HTTPException(status_code=401, detail="Invalid Authorization header")
 
@@ -118,6 +145,37 @@ def verify_user(authorization: str | None = Header(None)):
     except Exception as e:
         logging.error("AUTH ERROR: %s", str(e))
         raise HTTPException(status_code=401, detail="Authentication failed")
+
+
+def enforce_user_mutation_limit(user = Depends(verify_user)):
+    """Small single-instance guard against accidental or abusive provider spend."""
+    now = datetime.now(timezone.utc).timestamp()
+    with _mutation_lock:
+        window = _mutation_windows[str(user.id)]
+        while window and window[0] <= now - 60:
+            window.popleft()
+        if len(window) >= USER_MUTATION_LIMIT_PER_MINUTE:
+            raise HTTPException(status_code=429, detail="Too many requests. Try again shortly.")
+        window.append(now)
+    return user
+
+
+def _require_entity(entity_id: str) -> dict:
+    """Resolve pipeline inputs from the database instead of trusting callers."""
+    try:
+        result = (
+            supabase_admin.table("monitored_entities")
+            .select("id, name, profile_type, social_handle, user_id")
+            .eq("id", entity_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as exc:
+        logging.error("Entity lookup failed for %s: %s", entity_id, exc)
+        raise HTTPException(status_code=500, detail="Could not look up entity") from exc
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return result.data
 
 # =========================================================
 # HEALTH CHECKS
@@ -137,6 +195,26 @@ def check_db_connection():
         raise HTTPException(status_code=503, detail="Database unavailable")
 
 
+@app.get("/health/ready")
+def readiness_check():
+    missing = [
+        key for key in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE", "INTERNAL_API_KEY")
+        if not os.getenv(key)
+    ]
+    if not (os.getenv("GROQ_API_KEY") or (
+        os.getenv("AGENTROUTER_BASE_URL") and os.getenv("AGENTROUTER_API_KEY")
+    )):
+        missing.append("LLM_PROVIDER")
+    if missing:
+        raise HTTPException(status_code=503, detail="Service configuration incomplete")
+    try:
+        supabase_admin.table("monitored_entities").select("id").limit(1).execute()
+    except Exception as exc:
+        logging.error("Readiness database check failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    return {"status": "ready"}
+
+
 @app.get("/notification-preferences")
 def get_notification_preferences(user = Depends(verify_user)):
     try:
@@ -151,9 +229,7 @@ def get_notification_preferences(user = Depends(verify_user)):
             "email_alerts_enabled": True,
             "daily_digest_enabled": False,
         }
-        # Digest delivery is not scheduled yet. Expose that explicitly instead
-        # of presenting a persisted switch as a working notification channel.
-        return {**preferences, "daily_digest_available": False}
+        return {**preferences, "daily_digest_available": True}
     except Exception as e:
         logging.error("Notification preferences lookup failed for %s: %s", user.id, e)
         raise HTTPException(status_code=500, detail="Could not load notification preferences")
@@ -164,8 +240,6 @@ def update_notification_preferences(
     payload: NotificationPreferencesRequest,
     user = Depends(verify_user),
 ):
-    if payload.daily_digest_enabled:
-        raise HTTPException(status_code=400, detail="Daily digest delivery is not available yet")
     preferences = {
         "user_id": user.id,
         "email_alerts_enabled": payload.email_alerts_enabled,
@@ -183,14 +257,77 @@ def update_notification_preferences(
         raise HTTPException(status_code=500, detail="Could not update notification preferences")
     saved = getattr(result, "data", [])
     result_preferences = saved[0] if saved else preferences
-    return {**result_preferences, "daily_digest_available": False}
+    return {**result_preferences, "daily_digest_available": True}
+
+
+@app.get("/notifications")
+def list_notifications(limit: int = 30, unread_only: bool = False, user = Depends(verify_user)):
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+    try:
+        query = (supabase_admin.table("notifications").select("*")
+                 .eq("user_id", user.id).order("created_at", desc=True).limit(limit))
+        if unread_only:
+            query = query.eq("is_read", False)
+        return {"notifications": query.execute().data or []}
+    except Exception as exc:
+        logging.error("Notification list failed for %s: %s", user.id, exc)
+        raise HTTPException(status_code=500, detail="Could not load notifications")
+
+
+@app.patch("/notifications/{notification_id}/read")
+def mark_notification_read(notification_id: str, user = Depends(verify_user)):
+    try:
+        result = (supabase_admin.table("notifications")
+                  .update({"is_read": True, "read_at": datetime.now(timezone.utc).isoformat()})
+                  .eq("id", notification_id).eq("user_id", user.id).execute())
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        return {"success": True, "notification": result.data[0]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.error("Notification read failed for %s: %s", notification_id, exc)
+        raise HTTPException(status_code=500, detail="Could not update notification")
+
+
+@app.post("/notifications/read-all")
+def mark_all_notifications_read(user = Depends(verify_user)):
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        result = (supabase_admin.table("notifications")
+                  .update({"is_read": True, "read_at": now})
+                  .eq("user_id", user.id).eq("is_read", False).execute())
+        return {"success": True, "updated": len(result.data or [])}
+    except Exception as exc:
+        logging.error("Notification read-all failed for %s: %s", user.id, exc)
+        raise HTTPException(status_code=500, detail="Could not update notifications")
+
+
+@app.post("/internal/send-daily-digests", dependencies=[Depends(verify_internal_key)])
+def trigger_daily_digests():
+    return send_daily_digests()
 
 # =========================================================
 # BACKGROUND WORKER
 # =========================================================
 
 # 1. Change to `async def` to support the Tavily await call
-def _record_pipeline_run(entity_id: str, status: str, stage: str, error: str | None = None):
+PIPELINE_LEASE_SECONDS = int(os.getenv("PIPELINE_LEASE_SECONDS", "900"))
+
+
+def _record_pipeline_run(
+    entity_id: str,
+    status: str,
+    stage: str,
+    error: str | None = None,
+    *,
+    run_id: str | None = None,
+    brand_name: str | None = None,
+    profile_type: str | None = None,
+    social_handle: str | None = None,
+    worker_token: str | None = None,
+):
     """Persist background progress when the pipeline_runs migration is present."""
     payload = {
         "entity_id": entity_id,
@@ -201,35 +338,54 @@ def _record_pipeline_run(entity_id: str, status: str, stage: str, error: str | N
     }
     if status == "running" and stage == "starting":
         payload["started_at"] = payload["updated_at"]
+        payload.update({
+            "brand_name": brand_name,
+            "profile_type": profile_type,
+            "social_handle": social_handle,
+            "worker_token": worker_token,
+            "lease_expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=PIPELINE_LEASE_SECONDS)
+            ).isoformat(),
+        })
+    elif status == "running":
+        payload["lease_expires_at"] = (
+            datetime.now(timezone.utc) + timedelta(seconds=PIPELINE_LEASE_SECONDS)
+        ).isoformat()
     if status in {"completed", "failed"}:
         payload["finished_at"] = payload["updated_at"]
+        payload["lease_expires_at"] = None
 
     try:
         if status == "running" and stage == "starting":
-            supabase_admin.table("pipeline_runs").insert(payload).execute()
-            return
+            result = supabase_admin.table("pipeline_runs").insert(payload).execute()
+            return result.data[0]["id"] if result.data else None
 
-        existing = (
+        existing = ({"data": [{"id": run_id}]} if run_id else
             supabase_admin.table("pipeline_runs")
             .select("id")
             .eq("entity_id", entity_id)
             .eq("status", "running")
             .order("started_at", desc=True)
             .limit(1)
-            .execute()
-        )
-        if existing.data:
+            .execute())
+        existing_data = existing["data"] if isinstance(existing, dict) else existing.data
+        if existing_data:
             (
-                supabase_admin.table("pipeline_runs")
-                .update(payload)
-                .eq("id", existing.data[0]["id"])
-                .execute()
-            )
+                (supabase_admin.table("pipeline_runs")
+                 .update(payload)
+                 .eq("id", existing_data[0]["id"])
+                 .eq("worker_token", worker_token))
+                if worker_token else
+                (supabase_admin.table("pipeline_runs")
+                 .update(payload)
+                 .eq("id", existing_data[0]["id"]))
+            ).execute()
         else:
             supabase_admin.table("pipeline_runs").insert(payload).execute()
     except Exception as e:
         # Deploying code before the migration remains safe.
         logging.warning("Could not persist pipeline status for %s: %s", entity_id, e)
+    return run_id
 
 
 async def run_analysis_pipeline(
@@ -237,19 +393,36 @@ async def run_analysis_pipeline(
     brand_name: str,
     profile_type: str,
     social_handle: str | None = None,
+    run_id: str | None = None,
+    worker_token: str | None = None,
 ):
     """
     Executes the heavy scraping and Groq AI tasks in the background.
     Now properly asynchronous to prevent event-loop blocking.
     """
-    _record_pipeline_run(entity_id, "running", "starting")
+    if run_id:
+        _record_pipeline_run(
+            entity_id, "running", "recovering", run_id=run_id,
+            worker_token=worker_token,
+        )
+    else:
+        worker_token = str(uuid.uuid4())
+        run_id = _record_pipeline_run(
+            entity_id,
+            "running",
+            "starting",
+            brand_name=brand_name,
+            profile_type=profile_type,
+            social_handle=social_handle,
+            worker_token=worker_token,
+        )
     try:
         print(f"Starting pipeline for {brand_name} ({profile_type})...")
 
         # Fire standard scrapers (blocking requests calls -> offload to threads).
         # YouTube/Twitter/Facebook are env-gated no-ops until their keys are set,
         # so this is safe to run today.
-        _record_pipeline_run(entity_id, "running", "collecting_mentions")
+        _record_pipeline_run(entity_id, "running", "collecting_mentions", run_id=run_id, worker_token=worker_token)
         await asyncio.to_thread(scrape_nigerian_news, entity_id, brand_name, social_handle)
         await asyncio.to_thread(scrape_social_media, entity_id, brand_name, social_handle)
         await asyncio.to_thread(scrape_youtube, entity_id, brand_name, social_handle)
@@ -257,11 +430,11 @@ async def run_analysis_pipeline(
         await asyncio.to_thread(scrape_facebook, entity_id, brand_name, social_handle)
 
         # Fetch live web context using Tavily (natively async)
-        _record_pipeline_run(entity_id, "running", "searching_web")
+        _record_pipeline_run(entity_id, "running", "searching_web", run_id=run_id, worker_token=worker_token)
         live_context = await fetch_entity_context(brand_name, profile_type)
 
         # Run the synchronous sentiment analyzer off the event loop
-        _record_pipeline_run(entity_id, "running", "analyzing_sentiment")
+        _record_pipeline_run(entity_id, "running", "analyzing_sentiment", run_id=run_id, worker_token=worker_token)
         await asyncio.to_thread(
             analyze_and_store_sentiment,
             entity_id,
@@ -270,14 +443,14 @@ async def run_analysis_pipeline(
         )
 
         # Risk calculation is blocking (Supabase + Resend) -> offload
-        _record_pipeline_run(entity_id, "running", "calculating_risk")
+        _record_pipeline_run(entity_id, "running", "calculating_risk", run_id=run_id, worker_token=worker_token)
         await asyncio.to_thread(calculate_risk_and_alert, entity_id)
-        _record_pipeline_run(entity_id, "completed", "completed")
+        _record_pipeline_run(entity_id, "completed", "completed", run_id=run_id, worker_token=worker_token)
         print(f"Pipeline complete for {brand_name}.")
 
     except Exception as e:
         logging.exception("Pipeline error for %s", brand_name)
-        _record_pipeline_run(entity_id, "failed", "failed", str(e)[:500])
+        _record_pipeline_run(entity_id, "failed", "failed", str(e)[:500], run_id=run_id, worker_token=worker_token)
 
 
 # =========================================================
@@ -287,19 +460,41 @@ async def run_analysis_pipeline(
 @app.post("/sync/{entity_id}", dependencies=[Depends(verify_internal_key)])
 def sync_all_sources(
     entity_id: str,
-    brand_name: str,
+    brand_name: str | None = None,
     place_id: str = "mock_mode",
     social_handle: str | None = None,
 ):
-    news_count = scrape_nigerian_news(entity_id, brand_name, social_handle)
-    google_count = fetch_google_reviews(entity_id, place_id)
-    social_count = scrape_social_media(entity_id, brand_name, social_handle)
-    youtube_count = scrape_youtube(entity_id, brand_name, social_handle)
-    twitter_count = scrape_twitter(entity_id, brand_name, social_handle)
-    facebook_count = scrape_facebook(entity_id, brand_name, social_handle)
+    entity = _require_entity(entity_id)
+    brand_name = entity["name"]
+    social_handle = entity.get("social_handle")
+    worker_token = str(uuid.uuid4())
+    run_id = _record_pipeline_run(
+        entity_id, "running", "starting", brand_name=brand_name,
+        profile_type=entity.get("profile_type"), social_handle=social_handle,
+        worker_token=worker_token,
+    )
+    _record_pipeline_run(
+        entity_id, "running", "collecting_mentions", run_id=run_id,
+        worker_token=worker_token,
+    )
+    try:
+        news_count = scrape_nigerian_news(entity_id, brand_name, social_handle)
+        google_count = fetch_google_reviews(entity_id, place_id)
+        social_count = scrape_social_media(entity_id, brand_name, social_handle)
+        youtube_count = scrape_youtube(entity_id, brand_name, social_handle)
+        twitter_count = scrape_twitter(entity_id, brand_name, social_handle)
+        facebook_count = scrape_facebook(entity_id, brand_name, social_handle)
+    except Exception as exc:
+        _record_pipeline_run(
+            entity_id, "failed", "failed", str(exc)[:500], run_id=run_id,
+            worker_token=worker_token,
+        )
+        raise
 
     return {
         "status": "Sync Complete",
+        "pipeline_run_id": run_id,
+        "worker_token": worker_token,
         "scraped_items": {
             "news_mentions": news_count,
             "google_reviews": google_count,
@@ -311,8 +506,28 @@ def sync_all_sources(
     }
 
 @app.post("/analyze", dependencies=[Depends(verify_internal_key)])
-def trigger_analysis(entity_id: str = None, brand_name: str = None):
-    result = analyze_and_store_sentiment(entity_id=entity_id, brand_name=brand_name)
+def trigger_analysis(
+    entity_id: str = None,
+    brand_name: str = None,
+    pipeline_run_id: str | None = None,
+    worker_token: str | None = None,
+):
+    if not entity_id:
+        raise HTTPException(status_code=400, detail="entity_id is required")
+    entity = _require_entity(entity_id)
+    brand_name = entity["name"]
+    _record_pipeline_run(
+        entity_id, "running", "analyzing_sentiment",
+        run_id=pipeline_run_id, worker_token=worker_token,
+    )
+    try:
+        result = analyze_and_store_sentiment(entity_id=entity_id, brand_name=brand_name)
+    except Exception as exc:
+        _record_pipeline_run(
+            entity_id, "failed", "failed", str(exc)[:500],
+            run_id=pipeline_run_id, worker_token=worker_token,
+        )
+        raise
     return {"status": "Analysis Complete", "mentions_scored": result}
 
 
@@ -323,9 +538,68 @@ def trigger_sentiment_reprocess(entity_id: str, limit: int = 100):
     result = reprocess_existing_sentiment(entity_id, limit=limit)
     return {"status": "Reprocess Complete", **result}
 
+
+@app.post("/internal/recover-pipelines", dependencies=[Depends(verify_internal_key)])
+def recover_stale_pipelines(background_tasks: BackgroundTasks, limit: int = 10):
+    """Atomically lease and resume pipelines interrupted by a restart/deploy."""
+    if limit < 1 or limit > 50:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 50")
+    try:
+        result = supabase_admin.rpc(
+            "claim_recoverable_pipeline_runs",
+            {"p_limit": limit, "p_lease_seconds": PIPELINE_LEASE_SECONDS},
+        ).execute()
+    except Exception as exc:
+        logging.exception("Could not claim stale pipelines")
+        raise HTTPException(status_code=500, detail="Could not recover pipelines") from exc
+
+    claimed = result.data or []
+    for run in claimed:
+        if not run.get("brand_name") or not run.get("profile_type"):
+            _record_pipeline_run(
+                run["entity_id"], "failed", "failed",
+                "Recovery metadata is missing", run_id=run["id"],
+                worker_token=run.get("worker_token"),
+            )
+            continue
+        background_tasks.add_task(
+            run_analysis_pipeline,
+            run["entity_id"],
+            run["brand_name"],
+            run["profile_type"],
+            run.get("social_handle"),
+            run["id"],
+            run.get("worker_token"),
+        )
+    return {
+        "status": "Recovery Scheduled",
+        "claimed": len(claimed),
+        "entity_ids": [run["entity_id"] for run in claimed],
+    }
+
 @app.post("/calculate-risk/{entity_id}", dependencies=[Depends(verify_internal_key)])
-def trigger_risk_calculation(entity_id: str):
-    result = calculate_risk_and_alert(entity_id)
+def trigger_risk_calculation(
+    entity_id: str,
+    pipeline_run_id: str | None = None,
+    worker_token: str | None = None,
+):
+    _require_entity(entity_id)
+    _record_pipeline_run(
+        entity_id, "running", "calculating_risk",
+        run_id=pipeline_run_id, worker_token=worker_token,
+    )
+    try:
+        result = calculate_risk_and_alert(entity_id)
+    except Exception as exc:
+        _record_pipeline_run(
+            entity_id, "failed", "failed", str(exc)[:500],
+            run_id=pipeline_run_id, worker_token=worker_token,
+        )
+        raise
+    _record_pipeline_run(
+        entity_id, "completed", "completed",
+        run_id=pipeline_run_id, worker_token=worker_token,
+    )
     return result
 
 # =========================================================
@@ -336,7 +610,7 @@ def trigger_risk_calculation(entity_id: str):
 async def create_new_entity(
     payload: BrandCreateRequest,
     background_tasks: BackgroundTasks, # Injected to prevent frontend hangups
-    user = Depends(verify_user),
+    user = Depends(enforce_user_mutation_limit),
 ):
     """
     Creates a new monitored entity tied to the authenticated user.
@@ -361,6 +635,23 @@ async def create_new_entity(
 
     user_id = user.id
     user_email = user.email
+
+    try:
+        entity_count = (
+            supabase_admin.table("monitored_entities")
+            .select("id", count="exact")
+            .eq("user_id", user_id)
+            .execute()
+        ).count or 0
+    except Exception as e:
+        logging.error("Entity quota lookup failed for %s: %s", user_id, e)
+        raise HTTPException(status_code=500, detail="Could not verify account limits")
+    required_slots = 1 + len(competitor_names)
+    if entity_count + required_slots > MAX_ENTITIES_PER_USER:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Entity limit reached. This account supports {MAX_ENTITIES_PER_USER} tracked profiles.",
+        )
 
     # 2. Ensure profile exists
     try:
@@ -396,6 +687,7 @@ async def create_new_entity(
     entity_id = new_entity["id"]
 
     # 4. Handle Competitors (If provided in the payload)
+    created_competitors = []
     if competitor_names:
         for comp_name in competitor_names:
             try:
@@ -409,16 +701,37 @@ async def create_new_entity(
                 
                 comp_id = comp_insert.data[0]["id"]
                 
-                # Link the primary user to this competitor
-                supabase_admin.table("competitor_links").insert({
-                    "primary_entity_id": entity_id,
-                    "competitor_entity_id": comp_id
-                }).execute()
-                
-                # Trigger a separate background task to analyze the competitor
-                background_tasks.add_task(run_analysis_pipeline, comp_id, comp_name, payload.profile_type, None)
+                # Link the primary user to this competitor. Clean up the child
+                # entity if the link fails so it cannot become an orphan.
+                try:
+                    supabase_admin.table("competitor_links").insert({
+                        "primary_entity_id": entity_id,
+                        "competitor_entity_id": comp_id
+                    }).execute()
+                except Exception:
+                    supabase_admin.table("monitored_entities").delete().eq("id", comp_id).execute()
+                    raise
+                created_competitors.append((comp_id, comp_name))
             except Exception as e:
                 logging.error("Failed to map competitor %s: %s", comp_name, str(e))
+                # Entity creation is one logical operation. Roll back every row
+                # created by this request before returning an error.
+                for created_id, _created_name in created_competitors:
+                    try:
+                        supabase_admin.table("monitored_entities").delete().eq("id", created_id).execute()
+                    except Exception as cleanup_error:
+                        logging.error("Competitor rollback failed for %s: %s", created_id, cleanup_error)
+                try:
+                    supabase_admin.table("monitored_entities").delete().eq("id", entity_id).execute()
+                except Exception as cleanup_error:
+                    logging.error("Primary entity rollback failed for %s: %s", entity_id, cleanup_error)
+                raise HTTPException(status_code=500, detail="Could not create entity and competitors")
+
+    # Queue provider work only after all database rows are valid.
+    for comp_id, comp_name in created_competitors:
+        background_tasks.add_task(
+            run_analysis_pipeline, comp_id, comp_name, payload.profile_type, None
+        )
 
     # 5. Trigger primary pipeline in the background
     background_tasks.add_task(
@@ -437,7 +750,7 @@ async def add_competitor(
     entity_id: str,
     payload: CompetitorAddRequest,
     background_tasks: BackgroundTasks,
-    user = Depends(verify_user),
+    user = Depends(enforce_user_mutation_limit),
 ):
     """
     Links a new competitor to an existing entity owned by the caller.
@@ -491,6 +804,24 @@ async def add_competitor(
                         "already_exists": True,
                     }
 
+        if len(links.data or []) >= MAX_COMPETITORS_PER_ENTITY:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Competitor limit reached. Each profile supports {MAX_COMPETITORS_PER_ENTITY} competitors.",
+            )
+
+        entity_count = (
+            supabase_admin.table("monitored_entities")
+            .select("id", count="exact")
+            .eq("user_id", user_id)
+            .execute()
+        ).count or 0
+        if entity_count >= MAX_ENTITIES_PER_USER:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Entity limit reached. This account supports {MAX_ENTITIES_PER_USER} tracked profiles.",
+            )
+
         # Create the competitor entity owned by the same user so RLS scopes it
         # correctly (no orphaned null-owner rows).
         comp_insert = supabase_admin.table("monitored_entities").insert({
@@ -502,13 +833,20 @@ async def add_competitor(
         comp_id = comp_insert.data[0]["id"]
 
         # Link the primary entity to this competitor.
-        supabase_admin.table("competitor_links").insert({
-            "primary_entity_id": entity_id,
-            "competitor_entity_id": comp_id,
-        }).execute()
+        try:
+            supabase_admin.table("competitor_links").insert({
+                "primary_entity_id": entity_id,
+                "competitor_entity_id": comp_id,
+            }).execute()
+        except Exception:
+            # Avoid leaving an invisible orphan when the link insert fails.
+            supabase_admin.table("monitored_entities").delete().eq("id", comp_id).execute()
+            raise
 
         # Kick off analysis for the new competitor in the background.
         background_tasks.add_task(run_analysis_pipeline, comp_id, comp_name, profile_type)
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error("Failed to add competitor %s to %s: %s", comp_name, entity_id, str(e))
         raise HTTPException(status_code=500, detail="Could not add competitor")

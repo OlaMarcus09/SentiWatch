@@ -2,14 +2,18 @@ import os
 import json
 import logging
 import resend
+from html import escape
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from database import supabase, supabase_admin
 from scoring import calculate_entity_score
-from constants import EMAIL_ALERT_THRESHOLD
+from constants import EMAIL_ALERT_THRESHOLD, MAX_SCORING_MENTIONS, SCORING_WINDOW_DAYS
 from services import llm_client
 
 load_dotenv()
 resend.api_key = os.getenv("RESEND_API_KEY")
+ALERT_COOLDOWN_HOURS = int(os.getenv("ALERT_COOLDOWN_HOURS", "6"))
+STATUS_RANK = {"healthy": 0, "watch": 1, "elevated": 2, "high": 3, "critical": 4}
 
 
 RECOMMENDATION_SYSTEM_PROMPT = """
@@ -267,11 +271,17 @@ def _get_competitor_names(entity_id: str) -> list:
 # Fetch Mentions (with joins)
 # ──────────────────────────────────────────────────────
 def fetch_mentions(entity_id: str):
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=SCORING_WINDOW_DAYS)
+    ).isoformat()
     mentions = (
         supabase_admin
         .table("mentions")
         .select("*")
         .eq("entity_id", entity_id)
+        .gte("created_at", cutoff)
+        .order("created_at", desc=True)
+        .limit(MAX_SCORING_MENTIONS)
         .execute()
     ).data
 
@@ -377,13 +387,48 @@ def save_risk_score(entity_id: str, score: dict):
 # ──────────────────────────────────────────────────────
 # Send Email Alert
 # ──────────────────────────────────────────────────────
-def send_email(entity: dict, score: dict, previous_score: int | None = None) -> bool:
-    # Alert only when risk enters the alert band. This prevents hourly cron runs
-    # from sending the same notification indefinitely while risk remains high.
+def is_alert_event(score: dict, previous_score: int | None, previous_status: str | None = None) -> bool:
     if score["score"] < EMAIL_ALERT_THRESHOLD:
         return False
-    if previous_score is not None and previous_score >= EMAIL_ALERT_THRESHOLD:
+    if previous_score is None or previous_score < EMAIL_ALERT_THRESHOLD:
+        return True
+    if not previous_status:
         return False
+    return STATUS_RANK.get(score.get("status"), 0) > STATUS_RANK.get(previous_status, 0)
+
+
+def create_risk_notification(entity: dict, score: dict, previous_score: int | None = None, previous_status: str | None = None) -> bool:
+    """Persist an in-app alert, deduplicated by event/status during cooldown."""
+    if not is_alert_event(score, previous_score, previous_status) or not entity.get("user_id"):
+        return False
+    event_type = "risk_threshold" if previous_score is None or previous_score < EMAIL_ALERT_THRESHOLD else "risk_escalation"
+    cooldown_start = (datetime.now(timezone.utc) - timedelta(hours=ALERT_COOLDOWN_HOURS)).isoformat()
+    try:
+        recent = (supabase_admin.table("notifications").select("id")
+                  .eq("user_id", entity["user_id"]).eq("entity_id", entity["id"])
+                  .eq("event_type", event_type).eq("risk_status", score["status"])
+                  .gte("created_at", cooldown_start).limit(1).execute())
+        if recent.data:
+            return False
+        supabase_admin.table("notifications").insert({
+            "user_id": entity["user_id"], "entity_id": entity["id"],
+            "event_type": event_type,
+            "title": f"{entity['name']} risk is {score['status']}",
+            "message": f"Risk score is now {score['score']}/100.",
+            "risk_score": score["score"], "risk_status": score["status"],
+            "metadata": {"previous_score": previous_score, "previous_status": previous_status,
+                         "root_cause_summary": score.get("root_cause_summary", "")},
+        }).execute()
+        return True
+    except Exception as exc:
+        logging.warning("Could not create risk notification for %s: %s", entity.get("id"), exc)
+        return False
+
+
+def send_email(entity: dict, score: dict, previous_score: int | None = None, previous_status: str | None = None) -> bool:
+    if not is_alert_event(score, previous_score, previous_status):
+        return False
+
 
     # Resolve the owning user's real address and persisted notification choice.
     # Default-on preserves the existing behavior for users who have not opened
@@ -429,6 +474,9 @@ def send_email(entity: dict, score: dict, previous_score: int | None = None) -> 
         "high": "🔶",
         "critical": "🚨",
     }.get(score["status"], "🔔")
+    safe_name = escape(str(entity["name"]))
+    safe_profile = escape(str(entity.get("profile_type", "business")).upper())
+    safe_root_cause = escape(str(score.get("root_cause_summary", "")))
 
     try:
         resend.Emails.send({
@@ -442,14 +490,14 @@ def send_email(entity: dict, score: dict, previous_score: int | None = None) -> 
         <div style="font-family:sans-serif;max-width:560px;margin:0 auto;">
           <h2 style="color:#1A56DB;">SentiWatch Reputation Alert</h2>
           <p>
-            <strong>{entity['name']}</strong> now has a reputation risk score of
+            <strong>{safe_name}</strong> now has a reputation risk score of
             <strong style="font-size:1.2em;">{score['score']}/100</strong>.
           </p>
           <p>
             Status: <strong>{score['status'].upper()}</strong>
           </p>
-          <p>Profile Context: <strong>{entity.get('profile_type', 'business').upper()}</strong></p>
-          {f'<p><strong>Root Cause:</strong> {score.get("root_cause_summary", "N/A")}</p>' if score.get("root_cause_summary") else ''}
+          <p>Profile Context: <strong>{safe_profile}</strong></p>
+          {f'<p><strong>Root Cause:</strong> {safe_root_cause}</p>' if safe_root_cause else ''}
           <table style="border-collapse:collapse;width:100%;">
             <tr>
               <td style="padding:8px;border:1px solid #e5e7eb;">Negative mentions</td>
@@ -482,6 +530,54 @@ def send_email(entity: dict, score: dict, previous_score: int | None = None) -> 
         return False
 
 
+def send_daily_digests() -> dict:
+    """Send one digest per opted-in user, using persisted notification events."""
+    sent = skipped = failed = 0
+    try:
+        preferences = (supabase_admin.table("notification_preferences")
+                       .select("user_id, last_digest_sent_at")
+                       .eq("daily_digest_enabled", True).execute()).data or []
+    except Exception as exc:
+        logging.error("Could not load daily digest subscribers: %s", exc)
+        return {"sent": 0, "skipped": 0, "failed": 1}
+
+    now = datetime.now(timezone.utc)
+    for preference in preferences:
+        user_id = preference["user_id"]
+        try:
+            since = preference.get("last_digest_sent_at") or (now - timedelta(hours=24)).isoformat()
+            events = (supabase_admin.table("notifications")
+                      .select("title, message, risk_score, risk_status, created_at")
+                      .eq("user_id", user_id).gte("created_at", since)
+                      .order("created_at", desc=True).limit(50).execute()).data or []
+            if not events:
+                skipped += 1
+                continue
+            owner = (supabase_admin.table("users").select("email")
+                     .eq("id", user_id).maybe_single().execute()).data or {}
+            if not owner.get("email"):
+                skipped += 1
+                continue
+            rows = "".join(
+                f"<li><strong>{escape(str(event['title']))}</strong> — "
+                f"{escape(str(event['message']))}</li>"
+                for event in events
+            )
+            resend.Emails.send({
+                "from": "SentiWatch <onboarding@resend.dev>", "to": owner["email"],
+                "subject": f"SentiWatch daily digest — {len(events)} updates",
+                "html": f"<h2>Your SentiWatch daily digest</h2><ul>{rows}</ul>",
+            })
+            (supabase_admin.table("notification_preferences")
+             .update({"last_digest_sent_at": now.isoformat(), "updated_at": now.isoformat()})
+             .eq("user_id", user_id).execute())
+            sent += 1
+        except Exception as exc:
+            logging.warning("Daily digest failed for %s: %s", user_id, exc)
+            failed += 1
+    return {"sent": sent, "skipped": skipped, "failed": failed}
+
+
 # ──────────────────────────────────────────────────────
 # Main Orchestrator
 # Calls fetch_mentions() for joined mention+sentiment data,
@@ -499,64 +595,76 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
     mentions = fetch_mentions(entity_id)
     metrics = calculate_entity_score(mentions)
     previous_score = None
+    previous_status = None
+    previous_snapshot = None
     try:
         previous = (
             supabase_admin.table("risk_scores")
-            .select("score")
+            .select(
+                "score, status, negative_mentions, positive_mentions, "
+                "neutral_mentions, category_breakdown, root_cause_summary"
+            )
             .eq("entity_id", entity_id)
             .order("created_at", desc=True)
             .limit(1)
             .execute()
         ).data or []
         if previous:
-            previous_score = previous[0].get("score")
+            previous_snapshot = previous[0]
+            previous_score = previous_snapshot.get("score")
+            previous_status = previous_snapshot.get("status")
     except Exception as exc:
         logging.warning("Could not load previous risk score for %s: %s", entity_id, exc)
 
-    save_risk_score(entity_id, metrics)
+    snapshot_fields = (
+        "score", "status", "negative_mentions", "positive_mentions",
+        "neutral_mentions", "category_breakdown", "root_cause_summary",
+    )
+    snapshot_changed = previous_snapshot is None or any(
+        previous_snapshot.get(field) != metrics.get(field)
+        for field in snapshot_fields
+    )
+    if snapshot_changed:
+        save_risk_score(entity_id, metrics)
 
     final_score = metrics["score"]
     brand_name = entity["name"]
     
-    # Load competitor names to sharpen the AI recommendations.
-    competitors = _get_competitor_names(entity_id)
-
-    # Primary path: AI-generated, prioritized, discrete recommendations.
-    ai_recs = generate_ai_recommendations(
-        score=final_score,
-        status=metrics["status"],
-        category_breakdown=metrics.get("category_breakdown", {}),
-        top_root_causes=metrics.get("top_root_causes", []),
-        brand_name=brand_name,
-        profile_type=profile_type,
-        competitors=competitors,
-    )
-
-    if ai_recs:
-        # Store the array as JSON in the existing action_plan column — no schema
-        # migration needed. The frontend parses this into a ranked list.
-        action_payload = json.dumps({"recommendations": ai_recs})
-    else:
-        # Safety net: the legacy template playbook as a single plain string.
-        action_payload = generate_personalized_recommendation(
+    if snapshot_changed:
+        # Load competitor names to sharpen the AI recommendations.
+        competitors = _get_competitor_names(entity_id)
+        ai_recs = generate_ai_recommendations(
             score=final_score,
             status=metrics["status"],
             category_breakdown=metrics.get("category_breakdown", {}),
             top_root_causes=metrics.get("top_root_causes", []),
             brand_name=brand_name,
             profile_type=profile_type,
+            competitors=competitors,
         )
+        action_payload = (
+            json.dumps({"recommendations": ai_recs})
+            if ai_recs else
+            generate_personalized_recommendation(
+                score=final_score,
+                status=metrics["status"],
+                category_breakdown=metrics.get("category_breakdown", {}),
+                top_root_causes=metrics.get("top_root_causes", []),
+                brand_name=brand_name,
+                profile_type=profile_type,
+            )
+        )
+        supabase_admin.table("recommendations").insert({
+            "entity_id": entity_id,
+            "risk_score": final_score,
+            "trigger_category": metrics.get("primary_trigger_category", "general"),
+            "action_plan": action_payload,
+            "category_breakdown": metrics.get("category_breakdown", {}),
+            "root_cause_summary": metrics.get("root_cause_summary", "")
+        }).execute()
 
-    supabase_admin.table("recommendations").insert({
-        "entity_id": entity_id,
-        "risk_score": final_score,
-        "trigger_category": metrics.get("primary_trigger_category", "general"),
-        "action_plan": action_payload,
-        "category_breakdown": metrics.get("category_breakdown", {}),
-        "root_cause_summary": metrics.get("root_cause_summary", "")
-    }).execute()
-
-    alert_sent = send_email(entity, metrics, previous_score)
+    notification_created = create_risk_notification(entity, metrics, previous_score, previous_status)
+    alert_sent = send_email(entity, metrics, previous_score, previous_status)
 
     return {
         "entity": entity["name"],
@@ -569,6 +677,8 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
         "primary_trigger_category": metrics.get("primary_trigger_category", "general"),
         "root_cause_summary": metrics.get("root_cause_summary", ""),
         "category_breakdown": metrics.get("category_breakdown", {}),
-        "recommendation_generated": True,
-        "email_sent": alert_sent
+        "snapshot_created": snapshot_changed,
+        "recommendation_generated": snapshot_changed,
+        "email_sent": alert_sent,
+        "notification_created": notification_created,
     }

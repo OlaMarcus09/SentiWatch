@@ -120,7 +120,7 @@ export default function AlertCenter({ alerts = [] }: AlertCenterProps) {
           </div>
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">All clear</h3>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            No active alerts. We'll notify you immediately if anything changes.
+            No active alerts. We&apos;ll notify you immediately if anything changes.
           </p>
         </div>
       </Card>

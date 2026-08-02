@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 from dotenv import load_dotenv
@@ -223,36 +224,31 @@ def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
     Uses supabase_admin to bypass RLS for backend reads.
     """
 
-    # 1. Fetch IDs of mentions that already have a sentiment score
-    processed_res = (
-        supabase_admin
-        .table("sentiment_results")
-        .select("mention_id")
-        .execute()
-    )
-    processed_ids = [row["mention_id"] for row in (processed_res.data or [])]
-
-    # 2. Build the base query — filter by entity_id if provided
+    # Fetch only a bounded entity-scoped candidate set. The previous approach
+    # downloaded every processed mention ID across every tenant on each run.
     query = supabase_admin.table("mentions").select("*")
 
     if entity_id:
         query = query.eq("entity_id", entity_id)
 
-    # 3. Exclude already-processed mentions
-    if processed_ids:
-        query = query.not_.in_("id", processed_ids)
-
-    # 4. Newest first, hard limit
-    # Fetch extra candidates because terminally rejected rows may be mixed into
-    # older schemas where status cannot be filtered server-side yet.
     mentions_res = query.order("created_at", desc=True).limit(limit * 5).execute()
-
-    # Relevance rejections are terminal decisions. Older deployments may not
-    # have populated status, so null/missing status remains eligible.
-    return [
+    candidates = [
         mention for mention in (mentions_res.data or [])
         if mention.get("status") not in {"rejected", "processed"}
-    ][:limit]
+    ]
+    if not candidates:
+        return []
+
+    # Status is the primary lifecycle marker, but retain compatibility with
+    # older rows whose status is null while a result already exists.
+    processed_res = (
+        supabase_admin.table("sentiment_results")
+        .select("mention_id")
+        .in_("mention_id", [row["id"] for row in candidates])
+        .execute()
+    )
+    processed_ids = {row["mention_id"] for row in (processed_res.data or [])}
+    return [row for row in candidates if row["id"] not in processed_ids][:limit]
 
 
 RELEVANCE_SYSTEM_PROMPT = """
@@ -484,16 +480,30 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, l
     if live_context and live_context != "No recent web mentions found.":
         logging.info(f"Analyzing live web search context from Tavily for {brand_name}...")
         try:
-            # We create a structured pseudo-mention to capture the live search event
-            mention_res = supabase_admin.table("mentions").insert({
-                "entity_id": entity_id,
-                "source": "tavily_live_search",
-                "content": f"Live Context Snapshot: {live_context[:400]}...",
-                "status": "processed"
-            }).execute()
-            
-            if mention_res.data:
-                live_mention_id = mention_res.data[0]["id"]
+            # Store at most one Tavily evidence snapshot per entity per UTC day.
+            # Hourly overlapping snapshots previously inflated mention volume.
+            snapshot_id = f"tavily:{datetime.now(timezone.utc).date().isoformat()}"
+            existing = (
+                supabase_admin.table("mentions").select("id")
+                .eq("entity_id", entity_id)
+                .eq("platform", "tavily")
+                .eq("source_post_id", snapshot_id)
+                .limit(1)
+                .execute()
+            )
+            if not existing.data:
+                mention_res = supabase_admin.table("mentions").insert({
+                    "entity_id": entity_id,
+                    "source": "tavily_live_search",
+                    "platform": "tavily",
+                    "source_post_id": snapshot_id,
+                    "content": f"Live Context Snapshot: {live_context[:2000]}",
+                    "status": "pending",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }).execute()
+                live_mention_id = mention_res.data[0]["id"] if mention_res.data else None
+                if not live_mention_id:
+                    raise RuntimeError("Tavily snapshot insert returned no row")
                 
                 # Pass the raw web data directly to Groq using your robust engine
                 ai_result = call_groq(live_context[:2000]) # Cap text to prevent token blowing
@@ -503,6 +513,8 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, l
                 save_sentiment(live_mention_id, ai_result)
                 processed += 1
                 logging.info(f"Live Tavily Context analyzed successfully. Risk score impact mapped.")
+            else:
+                logging.info("Tavily snapshot already processed for this entity today.")
         except Exception as e:
             logging.error(f"Failed to process live context node: {e}")
             failed += 1

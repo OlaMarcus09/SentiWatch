@@ -1,0 +1,26 @@
+name: Daily Reputation Digest
+
+on:
+  schedule:
+    # 07:00 UTC is 08:00 in Nigeria (WAT).
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  send-digests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wake backend
+        run: curl --fail --retry 8 --retry-delay 8 --max-time 20 "${BACKEND_URL}/health/ready"
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+
+      - name: Send opted-in daily digests
+        run: |
+          curl --fail --show-error --max-time 120 \
+            -X POST "${BACKEND_URL}/internal/send-daily-digests" \
+            -H "X-Internal-Key: ${INTERNAL_API_KEY}"
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}

@@ -12,7 +12,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     // Listen for login state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_IN') {
         router.push('/'); // Send them to the dashboard when they log in
         router.refresh();

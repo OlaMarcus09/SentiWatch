@@ -5,7 +5,12 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const token_hash = searchParams.get('token_hash');
   const type = searchParams.get('type');
-  const next = searchParams.get('next') ?? '/';
+  const requestedNext = searchParams.get('next') ?? '/';
+  // Only permit same-origin application paths. An absolute or protocol-relative
+  // `next` value would otherwise turn the auth callback into an open redirect.
+  const next = requestedNext.startsWith('/') && !requestedNext.startsWith('//')
+    ? requestedNext
+    : '/';
 
   if (token_hash && type) {
     const supabase = createClient(

@@ -21,9 +21,9 @@ export default function SettingsPage() {
     refreshCompetitors,
     updateCurrentEntity,
   } = useDashboard();
-  const [name, setName] = useState('');
-  const [profileType, setProfileType] = useState('business');
-  const [socialHandle, setSocialHandle] = useState('');
+  const [name, setName] = useState(currentEntity?.name || '');
+  const [profileType, setProfileType] = useState(currentEntity?.profile_type || 'business');
+  const [socialHandle, setSocialHandle] = useState(currentEntity?.social_handle || '');
   const [competitor, setCompetitor] = useState('');
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -34,9 +34,11 @@ export default function SettingsPage() {
   const [loadingPreferences, setLoadingPreferences] = useState(true);
 
   useEffect(() => {
-    setName(currentEntity?.name || '');
-    setProfileType(currentEntity?.profile_type || 'business');
-    setSocialHandle(currentEntity?.social_handle || '');
+    queueMicrotask(() => {
+      setName(currentEntity?.name || '');
+      setProfileType(currentEntity?.profile_type || 'business');
+      setSocialHandle(currentEntity?.social_handle || '');
+    });
   }, [currentEntity]);
 
   useEffect(() => {

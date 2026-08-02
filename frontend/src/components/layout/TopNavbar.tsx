@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any -- entity rows are not generated yet. */
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -26,6 +27,16 @@ interface TopNavbarProps {
   entities: any[];
   userName?: string;
   userEmail?: string;
+  userToken: string;
+}
+
+interface NotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  created_at: string;
+  read_at?: string | null;
+  is_read?: boolean;
 }
 
 export default function TopNavbar({
@@ -36,24 +47,55 @@ export default function TopNavbar({
   entities,
   userName,
   userEmail,
+  userToken,
 }: TopNavbarProps) {
   const router = useRouter();
   const prefersReducedMotion = useReducedMotion();
   const [showProfile, setShowProfile] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [query, setQuery] = useState('');
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationError, setNotificationError] = useState('');
   const profileRef = useRef<HTMLDivElement>(null);
+  const notificationRef = useRef<HTMLDivElement>(null);
 
-  // Close the profile dropdown on outside click or Escape.
   useEffect(() => {
-    if (!showProfile) return;
+    if (!userToken) return;
+    let active = true;
+    const load = async () => {
+      try {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/notifications`, {
+          headers: { Authorization: `Bearer ${userToken}` },
+        });
+        if (!response.ok) throw new Error('Notification request failed');
+        const payload = await response.json();
+        if (active) setNotifications(Array.isArray(payload) ? payload : payload.notifications || []);
+      } catch {
+        if (active) setNotificationError('Could not load notifications.');
+      }
+    };
+    load();
+    const interval = window.setInterval(load, 30000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [userToken]);
+
+  // Close open dropdowns on outside click or Escape.
+  useEffect(() => {
+    if (!showProfile && !showNotifications) return;
     const onPointerDown = (e: MouseEvent) => {
       if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
         setShowProfile(false);
       }
+      if (notificationRef.current && !notificationRef.current.contains(e.target as Node)) {
+        setShowNotifications(false);
+      }
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowProfile(false);
+      if (e.key === 'Escape') {
+        setShowProfile(false);
+        setShowNotifications(false);
+      }
     };
     document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -61,12 +103,38 @@ export default function TopNavbar({
       document.removeEventListener('mousedown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [showProfile]);
+  }, [showProfile, showNotifications]);
 
   const handleSignOut = async () => {
     setSigningOut(true);
     await supabase.auth.signOut();
     router.push('/login');
+  };
+
+  const isUnread = (item: NotificationItem) => item.is_read === false || (!item.read_at && item.is_read !== true);
+  const unreadCount = notifications.filter(isUnread).length;
+
+  const markRead = async (notification: NotificationItem) => {
+    if (!isUnread(notification)) return;
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/notifications/${notification.id}/read`, {
+      method: 'PATCH', headers: { Authorization: `Bearer ${userToken}` },
+    });
+    if (response.ok) {
+      setNotifications((items) => items.map((item) => item.id === notification.id ? { ...item, is_read: true, read_at: new Date().toISOString() } : item));
+    } else {
+      setNotificationError('Could not mark notification as read.');
+    }
+  };
+
+  const markAllRead = async () => {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/notifications/read-all`, {
+      method: 'POST', headers: { Authorization: `Bearer ${userToken}` },
+    });
+    if (response.ok) {
+      setNotifications((items) => items.map((item) => ({ ...item, is_read: true, read_at: item.read_at || new Date().toISOString() })));
+    } else {
+      setNotificationError('Could not mark notifications as read.');
+    }
   };
 
   const initials =
@@ -157,14 +225,25 @@ export default function TopNavbar({
           </button>
 
           {/* Notifications */}
-          <button
-            type="button"
-            aria-label="Notifications"
-            onClick={() => router.push('/alerts')}
-            className="relative p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-          >
-            <Bell aria-hidden="true" className="w-5 h-5 text-slate-500" />
-          </button>
+          <div className="relative" ref={notificationRef}>
+            <button type="button" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} aria-expanded={showNotifications} onClick={() => setShowNotifications((open) => !open)} className="relative p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
+              <Bell aria-hidden="true" className="w-5 h-5 text-slate-500" />
+              {unreadCount > 0 && <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-[10px] text-white flex items-center justify-center">{unreadCount > 9 ? '9+' : unreadCount}</span>}
+            </button>
+            {showNotifications && (
+              <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-xl overflow-hidden z-50">
+                <div className="flex items-center justify-between p-3 border-b border-slate-100 dark:border-slate-700"><span className="text-sm font-semibold">Notifications</span>{unreadCount > 0 && <button type="button" onClick={markAllRead} className="text-xs text-blue-600">Mark all read</button>}</div>
+                <div className="max-h-80 overflow-y-auto">
+                  {notificationError ? <p className="p-4 text-xs text-red-600">{notificationError}</p> : notifications.length === 0 ? <p className="p-4 text-xs text-slate-500">No notifications yet.</p> : notifications.slice(0, 10).map((notification) => (
+                    <button key={notification.id} type="button" onClick={() => markRead(notification)} className={`w-full text-left p-3 border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 ${isUnread(notification) ? 'bg-blue-50/60 dark:bg-blue-950/20' : ''}`}>
+                      <span className="block text-sm font-medium text-slate-800 dark:text-slate-100">{notification.title}</span><span className="block mt-1 text-xs text-slate-500">{notification.message}</span><span className="block mt-1 text-[10px] text-slate-400">{new Date(notification.created_at).toLocaleString()}</span>
+                    </button>
+                  ))}
+                </div>
+                <Link href="/alerts" onClick={() => setShowNotifications(false)} className="block p-3 text-center text-xs font-medium text-blue-600">View alert center</Link>
+              </div>
+            )}
+          </div>
 
           {/* Profile */}
           <div className="relative" ref={profileRef}>

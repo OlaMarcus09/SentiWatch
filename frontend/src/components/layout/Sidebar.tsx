@@ -15,7 +15,6 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
-  Menu,
   X,
 } from 'lucide-react';
 
@@ -66,7 +65,7 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
       .map((p) => p[0]?.toUpperCase())
       .join('') || '?';
 
-  const handleNavClick = (href: string) => {
+  const handleNavClick = () => {
     if (isMobile) onClose();
   };
 
@@ -153,7 +152,7 @@ export default function Sidebar({ isOpen, onClose, isMobile, userName, userEmail
             <Link
               key={item.href}
               href={href}
-              onClick={() => handleNavClick(item.href)}
+              onClick={handleNavClick}
               aria-label={collapsed ? item.label : undefined}
               aria-current={isActive ? 'page' : undefined}
               className={baseClasses}

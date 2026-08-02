@@ -145,7 +145,9 @@ def recency_weight(created_at):
     age = (now - created).days
     decay = exp(-age / 60)
 
-    return max(0.20, decay)
+    # The risk engine applies a hard scoring window. Keep only a small floor
+    # within that window rather than allowing old evidence to persist forever.
+    return max(0.05, decay)
 
 
 # -----------------------------------------------------
