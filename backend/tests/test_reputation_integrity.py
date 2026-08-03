@@ -189,9 +189,9 @@ class ReputationIntegrityTests(unittest.TestCase):
         self.assertIn(("mention_id__in", ["mention-a"]), processed.filters)
 
     def test_sentiment_pipeline_uses_configured_batch_limit(self):
-        with patch.object(sentiment, "_fetch_entity_context", return_value=("business", [])), patch.object(
-            sentiment, "get_unprocessed_mentions", return_value=[]
-        ) as get_mentions:
+        with patch.object(sentiment, "GROQ_API_KEY", "test-groq-key"), patch.object(
+            sentiment, "_fetch_entity_context", return_value=("business", [])
+        ), patch.object(sentiment, "get_unprocessed_mentions", return_value=[]) as get_mentions:
             result = sentiment.analyze_and_store_sentiment(
                 entity_id="entity-a",
                 brand_name="Example",
