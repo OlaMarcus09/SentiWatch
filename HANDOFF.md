@@ -1,6 +1,6 @@
 # SentiWatch Handoff
 
-Last updated: 2026-08-02
+Last updated: 2026-08-03
 
 ## Current state
 
@@ -39,18 +39,18 @@ verification returned zero rows.
 The corrected production migration and verification script enforce this for
 future environments.
 
-## Remaining deployment sequence
+## Current handoff
 
-The reviewed production-readiness changes are pushed to `origin/main` at
-commit `06419c9`.
+The latest reliability fix is pushed to `origin/main` at commit `3d37e3c`.
+The product direction and active backlog are maintained in
+[`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md).
 
-1. Deploy the Render backend and verify `GET /health/ready` returns HTTP 200.
-2. Deploy the Vercel frontend with the production Supabase/API variables.
-3. Manually run `Hourly Reputation Pipeline` in GitHub Actions.
-4. Manually run `Daily Reputation Digest` in GitHub Actions.
-5. Test entity creation, competitor creation, notification read actions,
-   settings persistence, pipeline recovery, and one complete risk calculation.
-6. Configure a verified Resend sending domain instead of relying on
+1. Deploy the latest `3d37e3c` backend/workflow changes and run the pipeline once.
+2. Confirm the one-time `pipeline_runs` grants from
+   `scripts/2026-08-03_pipeline_runtime_grants.sql` are applied.
+3. Build the Data Trust Center and evidence-backed mention drawer (roadmap Now).
+4. Then implement competitor share-of-voice and historical comparisons.
+5. Configure a verified Resend sending domain instead of relying on
    `onboarding@resend.dev` for real customers.
 
 ## Important repository notes

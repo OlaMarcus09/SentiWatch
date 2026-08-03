@@ -1,6 +1,6 @@
 # SentiWatch Architecture
 
-SentiWatch is a multi-tenant reputation monitoring application. It collects public mentions for a tracked entity, classifies those mentions with an LLM, converts the classifications into a 0–100 reputation-risk score, and presents an urgency-oriented dashboard with recommendations, competitor comparisons, and alerts.
+SentiWatch is a multi-tenant, Nigeria-first reputation risk intelligence application. It collects public mentions for a tracked entity, classifies those mentions with an LLM, converts the classifications into a 0–100 reputation-risk score, and presents an urgency-oriented dashboard with evidence, recommendations, competitor comparisons, and alerts.
 
 This document describes the architecture currently implemented in the repository and the hardening work that should come next.
 
@@ -28,7 +28,7 @@ GitHub Actions hourly cron
    +--> /sync -> /analyze -> /calculate-risk
 ```
 
-The frontend reads most dashboard data directly from Supabase using the authenticated user's session. The backend uses the Supabase service-role client for system writes and background processing, so backend routes must enforce authorization explicitly wherever they act on behalf of a user.
+The frontend reads most dashboard data directly from Supabase using the authenticated user's session. User-scoped aggregate views such as the Data Trust Center should use an authorized backend endpoint so counts are complete and are not limited by the frontend's 200-row display window. The backend uses the Supabase service-role client for system writes and background processing, so backend routes must enforce authorization explicitly wherever they act on behalf of a user.
 
 ## Repository structure
 
@@ -158,10 +158,10 @@ Current limitations:
 
 1. **Verify and lock down Supabase RLS in production.** Confirm RLS is enabled on all tenant tables and test cross-user reads/writes, especially `competitor_links`, `pipeline_runs`, and child tables.
 2. **Move recovery to a dedicated worker when scale requires it.** Lease-based stale-run recovery now prevents permanently lost jobs; a queue worker remains the next step for higher throughput and strict execution guarantees.
-4. **Add rate limits and operational telemetry.** Protect JWT and internal routes, record provider latency/error counts, and alert on repeated failed runs or quota exhaustion.
-5. **Automate schema and dependency checks.** Run migrations in a controlled release step and add `pip-audit`, `npm audit`, and type/lint checks to CI.
-6. **Expand source coverage safely.** Replace mock/disabled adapters with credentialed integrations, normalize source metadata, and add fixture-based scraper tests.
-7. **Improve product correctness.** Add pagination, per-entity refresh controls, explicit stale-data indicators, and tests for score trends, competitor isolation, and alert deduplication.
+3. **Add rate limits and operational telemetry.** Protect JWT and internal routes, record provider latency/error counts, and alert on repeated failed runs or quota exhaustion.
+4. **Automate schema and dependency checks.** Run migrations in a controlled release step and add `pip-audit`, `npm audit`, and type/lint checks to CI.
+5. **Expand source coverage safely.** Replace mock/disabled adapters with credentialed integrations, normalize source metadata, and add fixture-based scraper tests.
+6. **Improve product correctness.** Add the Data Trust Center, evidence-backed mention detail, pagination, per-entity refresh controls, explicit stale-data indicators, and tests for score trends, competitor isolation, and alert deduplication. See [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md).
 
 ## Definition of “strong”
 

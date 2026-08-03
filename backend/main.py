@@ -177,6 +177,13 @@ def _require_entity(entity_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Entity not found")
     return result.data
 
+
+def _require_owned_entity(entity_id: str, user_id: str) -> dict:
+    entity = _require_entity(entity_id)
+    if str(entity.get("user_id")) != str(user_id):
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return entity
+
 # =========================================================
 # HEALTH CHECKS
 # =========================================================
@@ -233,6 +240,113 @@ def get_notification_preferences(user = Depends(verify_user)):
     except Exception as e:
         logging.error("Notification preferences lookup failed for %s: %s", user.id, e)
         raise HTTPException(status_code=500, detail="Could not load notification preferences")
+
+
+@app.get("/entities/{entity_id}/trust")
+def get_entity_trust_summary(entity_id: str, user = Depends(verify_user)):
+    """Return complete evidence coverage and pipeline health for one entity."""
+    _require_owned_entity(entity_id, user.id)
+    try:
+        mention_rows = (
+            supabase_admin.table("mentions")
+            .select("id, status, source, platform, created_at, published_at")
+            .eq("entity_id", entity_id)
+            .order("created_at", desc=True)
+            .limit(5000)
+            .execute()
+        ).data or []
+
+        mention_ids = [row["id"] for row in mention_rows]
+        analyzed_ids = set()
+        for offset in range(0, len(mention_ids), 200):
+            batch = mention_ids[offset:offset + 200]
+            if not batch:
+                continue
+            rows = (
+                supabase_admin.table("sentiment_results")
+                .select("mention_id")
+                .in_("mention_id", batch)
+                .execute()
+            ).data or []
+            analyzed_ids.update(row["mention_id"] for row in rows)
+
+        rejected_ids = {
+            row["id"] for row in mention_rows if row.get("status") == "rejected"
+        }
+        inconsistent_ids = {
+            row["id"] for row in mention_rows
+            if row.get("status") == "processed" and row["id"] not in analyzed_ids
+        }
+        pending_ids = {
+            row["id"] for row in mention_rows
+            if row["id"] not in analyzed_ids and row["id"] not in rejected_ids
+        }
+
+        source_map = {}
+        for row in mention_rows:
+            key = row.get("platform") or row.get("source") or "unknown"
+            item = source_map.setdefault(key, {
+                "source": key,
+                "collected": 0,
+                "analyzed": 0,
+                "pending": 0,
+                "latest_at": None,
+            })
+            item["collected"] += 1
+            if row["id"] in analyzed_ids:
+                item["analyzed"] += 1
+            elif row["id"] not in rejected_ids:
+                item["pending"] += 1
+            evidence_at = row.get("published_at") or row.get("created_at")
+            if evidence_at and (not item["latest_at"] or evidence_at > item["latest_at"]):
+                item["latest_at"] = evidence_at
+
+        latest_runs = (
+            supabase_admin.table("pipeline_runs")
+            .select("status, stage, error_message, started_at, finished_at")
+            .eq("entity_id", entity_id)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        ).data or []
+        latest_run = latest_runs[0] if latest_runs else None
+
+        total = len(mention_rows)
+        analyzed = len(analyzed_ids - rejected_ids)
+        pending = len(pending_ids)
+        rejected = len(rejected_ids)
+        inconsistent = len(inconsistent_ids)
+        if total == 0:
+            coverage_status = "no_evidence"
+        elif latest_run and latest_run.get("status") == "failed":
+            coverage_status = "degraded"
+        elif pending or inconsistent:
+            coverage_status = "partial"
+        else:
+            coverage_status = "verified"
+
+        return {
+            "entity_id": entity_id,
+            "coverage_status": coverage_status,
+            "coverage_pct": min(100, round((analyzed / max(1, total - rejected)) * 100)),
+            "counts": {
+                "collected": total,
+                "analyzed": analyzed,
+                "pending": pending,
+                "rejected": rejected,
+                "inconsistent": inconsistent,
+            },
+            "latest_pipeline": latest_run,
+            "sources": sorted(
+                source_map.values(), key=lambda item: item["collected"], reverse=True
+            ),
+            "truncated": total >= 5000,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.error("Trust summary failed for %s: %s", entity_id, exc)
+        raise HTTPException(status_code=500, detail="Could not load data trust summary")
 
 
 @app.put("/notification-preferences")
