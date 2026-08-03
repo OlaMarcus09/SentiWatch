@@ -132,6 +132,9 @@ create table if not exists public.notifications (
   created_at timestamptz not null default now()
 );
 
+grant select on table public.pipeline_runs to authenticated;
+grant select, insert, update on table public.pipeline_runs to service_role;
+
 create unique index if not exists mentions_entity_url_unique
   on public.mentions (entity_id, url) where url is not null and url <> '';
 create unique index if not exists mentions_entity_platform_comment_unique

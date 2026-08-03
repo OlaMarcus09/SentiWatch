@@ -188,6 +188,19 @@ class ReputationIntegrityTests(unittest.TestCase):
         self.assertIn(("entity_id", "entity-a"), candidates.filters)
         self.assertIn(("mention_id__in", ["mention-a"]), processed.filters)
 
+    def test_sentiment_pipeline_uses_configured_batch_limit(self):
+        with patch.object(sentiment, "_fetch_entity_context", return_value=("business", [])), patch.object(
+            sentiment, "get_unprocessed_mentions", return_value=[]
+        ) as get_mentions:
+            result = sentiment.analyze_and_store_sentiment(
+                entity_id="entity-a",
+                brand_name="Example",
+                limit=2,
+            )
+
+        self.assertEqual(result, {"processed": 0, "failed": 0})
+        get_mentions.assert_called_once_with(entity_id="entity-a", limit=2)
+
     def test_positive_mentions_reduce_aggregate_risk(self):
         now = datetime.now(timezone.utc).isoformat()
         negative = {

@@ -37,7 +37,8 @@ RELEVANCE_MODEL = os.getenv("RELEVANCE_MODEL", DEFAULT_GROQ_MODEL)
 SENTIMENT_MODEL = os.getenv("SENTIMENT_MODEL", DEFAULT_GROQ_MODEL)
 RECOMMENDATION_MODEL = os.getenv("RECOMMENDATION_MODEL", DEFAULT_GROQ_MODEL)
 
-MAX_RETRIES = 3
+MAX_RETRIES = max(1, int(os.getenv("LLM_MAX_RETRIES", "2")))
+REQUEST_TIMEOUT_SECONDS = max(5, int(os.getenv("LLM_REQUEST_TIMEOUT", "15")))
 
 
 def _use_agentrouter() -> bool:
@@ -106,6 +107,7 @@ def chat_json(
                 ],
                 temperature=temperature,
                 response_format={"type": "json_object"},
+                timeout=REQUEST_TIMEOUT_SECONDS,
             )
             content = response.choices[0].message.content
             return json.loads(content)

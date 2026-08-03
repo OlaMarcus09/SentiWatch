@@ -64,5 +64,8 @@ jobs:
           # Covers both synchronous Apify actors plus the other source calls.
           PIPELINE_SYNC_TIMEOUT: "300"
           PIPELINE_ANALYZE_TIMEOUT: "180"
+          # Bound each run so one entity cannot monopolize the hourly worker.
+          # Remaining pending mentions continue in the next scheduled cycle.
+          PIPELINE_ANALYZE_BATCH_LIMIT: "2"
           PIPELINE_RISK_TIMEOUT: "60"
         run: python cron_sync.py

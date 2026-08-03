@@ -17,6 +17,7 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 SYNC_TIMEOUT = int(os.getenv("PIPELINE_SYNC_TIMEOUT", "300"))
 ANALYZE_TIMEOUT = int(os.getenv("PIPELINE_ANALYZE_TIMEOUT", "180"))
+ANALYZE_BATCH_LIMIT = max(1, min(20, int(os.getenv("PIPELINE_ANALYZE_BATCH_LIMIT", "2"))))
 RISK_TIMEOUT = int(os.getenv("PIPELINE_RISK_TIMEOUT", "60"))
 
 # Sent on every internal POST so the backend's verify_internal_key dependency
@@ -66,7 +67,7 @@ def _post_stage(path: str, entity: dict, timeout: int, pipeline: dict | None = N
                 **({"social_handle": entity.get("social_handle")} if entity.get("social_handle") else {}),
                 **({"pipeline_run_id": pipeline["id"], "worker_token": pipeline["worker_token"]} if pipeline and path != f"/sync/{entity['id']}" else {}),
             } if path.startswith("/sync/") else (
-                {"entity_id": entity["id"], "brand_name": name, **({"pipeline_run_id": pipeline["id"], "worker_token": pipeline["worker_token"]} if pipeline else {})}
+                {"entity_id": entity["id"], "brand_name": name, "limit": ANALYZE_BATCH_LIMIT, **({"pipeline_run_id": pipeline["id"], "worker_token": pipeline["worker_token"]} if pipeline else {})}
                 if path == "/analyze" else (
                     {"pipeline_run_id": pipeline["id"], "worker_token": pipeline["worker_token"]}
                     if pipeline and path.startswith("/calculate-risk/") else None

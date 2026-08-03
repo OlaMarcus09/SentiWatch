@@ -17,6 +17,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 MAX_RETRIES = 3
 REQUEST_TIMEOUT = 60
+SENTIMENT_BATCH_LIMIT = max(1, min(20, int(os.getenv("SENTIMENT_BATCH_LIMIT", "2"))))
 
 # Logging setup
 logging.basicConfig(
@@ -469,7 +470,12 @@ def _fetch_entity_context(entity_id: str) -> tuple:
     return profile_type, competitors
 
 
-def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, live_context: str = ""):
+def analyze_and_store_sentiment(
+    entity_id: str = None,
+    brand_name: str = None,
+    live_context: str = "",
+    limit: int | None = None,
+):
     """
     Main pipeline. Accepts optional entity_id, brand_name, and live_context
     so the gatekeeper, entity filter, and Tavily integrations work perfectly.
@@ -528,7 +534,8 @@ def analyze_and_store_sentiment(entity_id: str = None, brand_name: str = None, l
             failed += 1
 
     # 2. Existing Scraped Data Flow: Fetch raw mentions from database tables
-    mentions = get_unprocessed_mentions(entity_id=entity_id, limit=20)
+    batch_limit = max(1, min(20, limit or SENTIMENT_BATCH_LIMIT))
+    mentions = get_unprocessed_mentions(entity_id=entity_id, limit=batch_limit)
 
     if not mentions:
         logging.info("No new database-scraped mentions to process.")

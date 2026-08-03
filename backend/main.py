@@ -511,6 +511,7 @@ def sync_all_sources(
 def trigger_analysis(
     entity_id: str = None,
     brand_name: str = None,
+    limit: int | None = None,
     pipeline_run_id: str | None = None,
     worker_token: str | None = None,
 ):
@@ -523,7 +524,11 @@ def trigger_analysis(
         run_id=pipeline_run_id, worker_token=worker_token,
     )
     try:
-        result = analyze_and_store_sentiment(entity_id=entity_id, brand_name=brand_name)
+        result = analyze_and_store_sentiment(
+            entity_id=entity_id,
+            brand_name=brand_name,
+            limit=limit,
+        )
         if result.get("failed", 0):
             raise RuntimeError(
                 f"Sentiment analysis failed for {result['failed']} mention(s)"

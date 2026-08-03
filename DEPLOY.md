@@ -21,6 +21,10 @@ Required production configuration now also includes:
 - `MAX_ENTITIES_PER_USER` — defaults to 10, including competitor entities.
 - `MAX_COMPETITORS_PER_ENTITY` — defaults to 3.
 - `USER_MUTATION_LIMIT_PER_MINUTE` — defaults to 10.
+- `SENTIMENT_BATCH_LIMIT` — defaults to 2 mentions per analysis request so
+  scheduled work remains within free-tier request limits.
+- `LLM_REQUEST_TIMEOUT` — defaults to 15 seconds per provider attempt.
+- `LLM_MAX_RETRIES` — defaults to 2 attempts per mention.
 
 After deployment, `GET /health/ready` must return HTTP 200. The endpoint fails
 closed when the service-role key, internal key, LLM provider, or database is

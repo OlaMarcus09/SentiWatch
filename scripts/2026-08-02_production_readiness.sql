@@ -159,6 +159,9 @@ alter table public.sentiment_results enable row level security;
 alter table public.risk_scores enable row level security;
 alter table public.recommendations enable row level security;
 alter table public.pipeline_runs enable row level security;
+
+grant select on table public.pipeline_runs to authenticated;
+grant select, insert, update on table public.pipeline_runs to service_role;
 alter table public.notification_preferences enable row level security;
 alter table public.notifications enable row level security;
 
