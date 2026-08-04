@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import Badge from '../ui/Badge';
+import { sourceLabel } from '@/lib/sourceLabels';
 
 interface SentimentResult {
   label?: string | null;
@@ -205,7 +206,7 @@ export default function MentionDetailDrawer({ mention, onClose }: MentionDetailD
 
             <section aria-labelledby={`${titleId}-origin`} className="grid gap-3 sm:grid-cols-2">
               <h3 id={`${titleId}-origin`} className="sr-only">Mention origin</h3>
-              <DetailItem icon={Globe} label="Source" value={readable(mention.source || mention.platform)} />
+              <DetailItem icon={Globe} label="Source" value={sourceLabel(mention.platform || mention.source)} />
               <DetailItem icon={CalendarClock} label="Published" value={formatDate(mention.published_at || mention.created_at)} />
               <DetailItem
                 icon={UserRound}

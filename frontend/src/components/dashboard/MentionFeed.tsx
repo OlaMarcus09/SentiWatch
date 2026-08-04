@@ -6,6 +6,7 @@ import { useState } from 'react';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import MentionDetailDrawer, { MentionDetail } from './MentionDetailDrawer';
+import { sourceLabel } from '@/lib/sourceLabels';
 import {
   Globe,
   MessageSquare,
@@ -68,7 +69,7 @@ export default function MentionFeed({ mentions }: MentionFeedProps) {
           const category = m.sentiment_results?.[0]?.category || 'general';
           const severity = m.sentiment_results?.[0]?.severity || 0;
           const rootCause = m.sentiment_results?.[0]?.root_cause || '';
-          const source = m.source || 'Unknown';
+          const source = sourceLabel(m.platform || m.source);
 
           const sourceColor = platformColors[source] || 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400';
 

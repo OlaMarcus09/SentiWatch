@@ -154,7 +154,7 @@ export default function DashboardProvider({
     const loadingMessages = [
       'Authenticating user…',
       'Deploying data scrapers…',
-      'Searching live web context via Tavily…',
+      'Searching current web coverage…',
       'Analyzing sentiment with Groq Llama-3…',
       'Calculating risk index…',
       'Generating competitor matrix…',

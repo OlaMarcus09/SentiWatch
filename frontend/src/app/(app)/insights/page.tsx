@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock3, Database, RefreshCw, ShieldCheck, Signal } from 'lucide-react';
 import { useDashboard } from '@/components/providers/DashboardProvider';
 import SentimentChart from '@/components/SentimentChart';
+import { sourceLabel } from '@/lib/sourceLabels';
 import CategoryHeatmap from '@/components/CategoryHeatmap';
 import MentionFeed from '@/components/dashboard/MentionFeed';
 import CompetitorComparisonMatrix from '@/components/dashboard/CompetitorComparisonMatrix';
@@ -211,7 +212,7 @@ export default function InsightsPage() {
               {trust.sources.slice(0, 6).map((source) => (
                 <div key={source.source} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5 dark:border-slate-700 dark:bg-slate-900/50">
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-semibold capitalize text-slate-800 dark:text-slate-100">{source.source}</p>
+                    <p className="truncate text-xs font-semibold text-slate-800 dark:text-slate-100">{sourceLabel(source.source)}</p>
                     <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">{source.analyzed}/{source.collected} analyzed · {formatEvidenceAge(source.age_hours)}</p>
                   </div>
                   <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${

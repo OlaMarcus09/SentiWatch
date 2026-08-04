@@ -70,7 +70,8 @@ export default function CompetitorMentionsModal({ competitor, onClose, filters, 
             const source = String(mention.platform || mention.source || '').toLowerCase();
             if (filters?.source && source !== filters.source.toLowerCase()) return false;
             const sentiment = mention.sentiment_results?.[0];
-            if (filters?.sentiment && sentiment?.label !== filters.sentiment) return false;
+            if (filters?.sentiment === 'pending' && sentiment) return false;
+            if (filters?.sentiment && filters.sentiment !== 'pending' && sentiment?.label !== filters.sentiment) return false;
             if (filters?.category && sentiment?.category !== filters.category) return false;
             return true;
           });

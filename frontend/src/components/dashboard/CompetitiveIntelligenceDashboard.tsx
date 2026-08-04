@@ -23,6 +23,7 @@ import {
   YAxis,
 } from 'recharts';
 import Card from '../ui/Card';
+import { sourceLabel } from '@/lib/sourceLabels';
 
 export interface ComparisonFilters {
   entity_id: string;
@@ -107,12 +108,14 @@ export interface CompetitiveIntelligenceResponse {
 interface Props {
   data: CompetitiveIntelligenceResponse;
   onInspect: (entity: CompetitiveEntity, filters: ComparisonFilters, title: string) => void;
+  onAnalyze: (entity: CompetitiveEntity) => void;
+  analyzingEntityId: string | null;
 }
 
 const COLORS = ['#2563eb', '#f97316', '#8b5cf6', '#14b8a6'];
 
 function label(value: string) {
-  return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return sourceLabel(value);
 }
 
 function formatDate(value: string) {
@@ -152,7 +155,7 @@ function Trend({ entity }: { entity: CompetitiveEntity }) {
   );
 }
 
-export default function CompetitiveIntelligenceDashboard({ data, onInspect }: Props) {
+export default function CompetitiveIntelligenceDashboard({ data, onInspect, onAnalyze, analyzingEntityId }: Props) {
   const [trendMetric, setTrendMetric] = useState<'mentions' | 'negative'>('mentions');
   const overallEvidence = data.entities.every((entity) => entity.evidence_status === 'no_evidence')
     ? 'no_evidence'
@@ -317,7 +320,26 @@ export default function CompetitiveIntelligenceDashboard({ data, onInspect }: Pr
 
             {entity.evidence_status === 'partial' && (
               <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
-                {entity.counts.pending} mention{entity.counts.pending === 1 ? ' is' : 's are'} awaiting analysis. Sentiment shares use only the {entity.counts.analyzed} analyzed mentions.
+                <p>
+                  {entity.counts.pending} mention{entity.counts.pending === 1 ? ' is' : 's are'} queued for classification. Until processing completes, {entity.name}&apos;s sentiment shares use only the {entity.counts.analyzed} analyzed mentions.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onInspect(entity, { ...entity.filters.voice, sentiment: 'pending' }, `${entity.name} pending mentions`)}
+                    className="inline-flex min-h-9 items-center rounded-lg border border-amber-300 bg-white/70 px-3 font-semibold text-amber-900 transition hover:bg-white dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
+                  >
+                    Review pending
+                  </button>
+                  <button
+                    type="button"
+                    disabled={analyzingEntityId === entity.id}
+                    onClick={() => onAnalyze(entity)}
+                    className="inline-flex min-h-9 items-center rounded-lg bg-amber-900 px-3 font-semibold text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
+                  >
+                    {analyzingEntityId === entity.id ? 'Starting analysis…' : 'Analyze pending now'}
+                  </button>
+                </div>
               </div>
             )}
           </Card>

@@ -244,7 +244,7 @@ export default function SettingsPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-900/50 dark:bg-emerald-950/30">
                 <div className="flex items-center justify-between gap-3"><span className="font-semibold text-emerald-800 dark:text-emerald-300">Web and news</span><span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300">Active</span></div>
-                <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-400">RSS publishers and live Tavily search context.</p>
+                <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-400">Online publishers and live web search coverage.</p>
               </div>
               <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900/50 dark:bg-amber-950/30">
                 <div className="flex items-center justify-between gap-3"><span className="font-semibold text-amber-800 dark:text-amber-300">Social channels</span><span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-700 dark:bg-amber-900/60 dark:text-amber-300">Configured by API</span></div>

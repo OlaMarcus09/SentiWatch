@@ -23,6 +23,8 @@ export default function CompetitorsPage() {
   const [comparison, setComparison] = useState<CompetitiveIntelligenceResponse | null>(null);
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [analyzingEntityId, setAnalyzingEntityId] = useState<string | null>(null);
+  const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
   const [evidenceView, setEvidenceView] = useState<{
     entity: CompetitiveEntity;
     filters: ComparisonFilters;
@@ -116,6 +118,27 @@ export default function CompetitorsPage() {
     }
   };
 
+  const handleAnalyze = async (entity: CompetitiveEntity) => {
+    setAnalyzingEntityId(entity.id);
+    setAnalysisMessage(null);
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/entities/${entity.id}/analyze`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${userToken}` },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.detail || 'Could not start analysis');
+      setAnalysisMessage(result.status === 'already_running'
+        ? `${entity.name} is already being analyzed. We’ll refresh the comparison as it completes.`
+        : `Analysis started for ${entity.name}. Pending mentions will move into the comparison when classification completes.`);
+    } catch (analysisError) {
+      console.error(analysisError);
+      setAnalysisMessage(`We couldn’t start analysis for ${entity.name}. Try again in a moment.`);
+    } finally {
+      setAnalyzingEntityId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <Card hover={false} className="p-6">
@@ -203,6 +226,12 @@ export default function CompetitorsPage() {
             </div>
           </div>
 
+          {analysisMessage && (
+            <p role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-800 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300">
+              {analysisMessage}
+            </p>
+          )}
+
           {comparisonLoading && !comparison ? (
             <Card hover={false} className="flex min-h-72 flex-col items-center justify-center gap-3 text-center">
               <Loader2 aria-hidden="true" className="h-7 w-7 animate-spin text-blue-600" />
@@ -221,6 +250,8 @@ export default function CompetitorsPage() {
             <CompetitiveIntelligenceDashboard
               data={comparison}
               onInspect={(entity, filters, title) => setEvidenceView({ entity, filters, title })}
+              onAnalyze={handleAnalyze}
+              analyzingEntityId={analyzingEntityId}
             />
           ) : (
             <CompetitorComparisonMatrix primaryEntity={currentEntity} primaryRiskScore={finalRiskScore} competitors={competitorsData} />
