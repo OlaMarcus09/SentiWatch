@@ -161,6 +161,83 @@ class ReputationIntegrityTests(unittest.TestCase):
                 competitors=["A", "B", "C", "D"],
             )
 
+    def test_competitive_intelligence_rejects_unsupported_window(self):
+        with patch.object(api_main, "_require_owned_entity") as require_owned:
+            with self.assertRaises(api_main.HTTPException) as context:
+                api_main.get_competitive_intelligence(
+                    "entity-a", window=14, user=SimpleNamespace(id="user-a")
+                )
+
+        self.assertEqual(context.exception.status_code, 400)
+        require_owned.assert_not_called()
+
+    def test_competitive_intelligence_reports_shares_trends_and_partial_evidence(self):
+        period_start = datetime(2026, 7, 5, tzinfo=timezone.utc)
+        period_end = datetime(2026, 8, 4, tzinfo=timezone.utc)
+        result = api_main._build_competitive_intelligence(
+            primary_entity_id="entity-a",
+            entities=[
+                {"id": "entity-a", "name": "Primary"},
+                {"id": "entity-b", "name": "Competitor"},
+            ],
+            mentions=[
+                {
+                    "id": "mention-a1", "entity_id": "entity-a", "source": "Reddit",
+                    "status": "processed", "created_at": "2026-08-01T10:00:00Z",
+                },
+                {
+                    "id": "mention-a2", "entity_id": "entity-a", "source": "Reddit",
+                    "status": "pending", "created_at": "2026-08-02T10:00:00Z",
+                },
+                {
+                    "id": "mention-b1", "entity_id": "entity-b", "platform": "twitter",
+                    "status": "processed", "created_at": "2026-08-03T10:00:00Z",
+                },
+                {
+                    "id": "mention-rejected", "entity_id": "entity-b", "source": "Spam",
+                    "status": "rejected", "created_at": "2026-08-03T11:00:00Z",
+                },
+            ],
+            sentiments=[
+                {"mention_id": "mention-a1", "label": "negative", "category": "service"},
+                {"mention_id": "mention-b1", "label": "positive", "category": "praise"},
+            ],
+            risk_snapshots=[
+                {"entity_id": "entity-a", "score": 40, "status": "watch", "created_at": "2026-07-10T00:00:00Z"},
+                {"entity_id": "entity-a", "score": 55, "status": "elevated", "created_at": "2026-08-03T00:00:00Z"},
+            ],
+            window_days=30,
+            period_start=period_start,
+            period_end=period_end,
+        )
+
+        primary, competitor = result["entities"]
+        self.assertEqual(primary["shares"]["voice"], 66.7)
+        self.assertEqual(primary["shares"]["negative"], 100.0)
+        self.assertEqual(primary["evidence_status"], "partial")
+        self.assertEqual(primary["coverage_pct"], 50.0)
+        self.assertEqual(primary["risk_delta"], 15)
+        self.assertEqual(primary["latest_risk"]["score"], 55)
+        self.assertEqual(primary["top_categories"][0]["filters"]["category"], "service")
+        self.assertEqual(primary["trend"][-1]["risk_score"], 55)
+        self.assertEqual(competitor["shares"]["voice"], 33.3)
+        self.assertEqual(competitor["counts"]["mentions"], 1)
+        self.assertEqual(result["total_mentions"], 3)
+
+    def test_competitive_intelligence_requires_primary_ownership(self):
+        with patch.object(
+            api_main,
+            "_require_owned_entity",
+            side_effect=api_main.HTTPException(status_code=404, detail="Entity not found"),
+        ), patch.object(api_main.supabase_admin, "table") as table:
+            with self.assertRaises(api_main.HTTPException) as context:
+                api_main.get_competitive_intelligence(
+                    "entity-a", window=30, user=SimpleNamespace(id="user-b")
+                )
+
+        self.assertEqual(context.exception.status_code, 404)
+        table.assert_not_called()
+
     def test_mention_deduplication_is_scoped_to_entity(self):
         lookup = QueryDouble(data=[])
         insert = QueryDouble(data=[])

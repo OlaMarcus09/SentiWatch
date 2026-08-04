@@ -131,6 +131,8 @@ Acceptance criteria:
 
 ## Decision log
 
+- 2026-08-04: Ship competitive intelligence as evidence-linked 7/30/90-day
+  comparisons before starting incident workflow.
 - 2026-08-03: Prioritize Data Trust Center over additional connectors.
 - 2026-08-03: Use Nigeria-first risk interpretation as the product differentiator.
 - 2026-08-03: Extend Insights and Competitors before adding new top-level navigation.
@@ -143,4 +145,7 @@ Acceptance criteria:
 - [x] Fix pending mentions in the Insights sentiment filter.
 - [x] Add mention evidence drawer using existing mention and sentiment columns.
 - [x] Add manual per-entity analysis trigger and progress state.
-- [ ] Add 7/30/90-day competitor share-of-voice queries.
+- [x] Add 7/30/90-day competitor share-of-voice queries.
+- [x] Add mention/risk trends, source distribution, complaint categories, and
+  evidence drill-downs to the Competitors page.
+- [ ] Add durable incident ownership and response workflow.

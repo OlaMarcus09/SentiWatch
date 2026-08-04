@@ -1,9 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Users, Plus, Loader2 } from 'lucide-react';
+import { Users, Plus, Loader2, RefreshCw } from 'lucide-react';
 import { useDashboard } from '@/components/providers/DashboardProvider';
 import CompetitorComparisonMatrix from '@/components/dashboard/CompetitorComparisonMatrix';
+import CompetitorMentionsModal from '@/components/dashboard/CompetitorMentionsModal';
+import CompetitiveIntelligenceDashboard, {
+  type ComparisonFilters,
+  type CompetitiveEntity,
+  type CompetitiveIntelligenceResponse,
+} from '@/components/dashboard/CompetitiveIntelligenceDashboard';
 import Card from '@/components/ui/Card';
 
 export default function CompetitorsPage() {
@@ -13,6 +19,17 @@ export default function CompetitorsPage() {
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [windowDays, setWindowDays] = useState<7 | 30 | 90>(30);
+  const [comparison, setComparison] = useState<CompetitiveIntelligenceResponse | null>(null);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [evidenceView, setEvidenceView] = useState<{
+    entity: CompetitiveEntity;
+    filters: ComparisonFilters;
+    title: string;
+  } | null>(null);
+
+  const competitorSignature = competitorsData.map((competitor) => competitor.id).sort().join(',');
 
   useEffect(() => {
     if (!currentEntity?.id) return;
@@ -26,6 +43,45 @@ export default function CompetitorsPage() {
     poll();
     return () => { if (timer) clearTimeout(timer); };
   }, [currentEntity?.id, refreshCompetitors]);
+
+  useEffect(() => {
+    if (!currentEntity?.id || !userToken || !competitorSignature) {
+      setComparison(null);
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+
+    const loadComparison = async (showLoading = false) => {
+      if (showLoading) setComparisonLoading(true);
+      setComparisonError(null);
+      try {
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/entities/${currentEntity.id}/competitive-intelligence?window=${windowDays}`,
+          { headers: { Authorization: `Bearer ${userToken}` } }
+        );
+        if (!response.ok) throw new Error(`Comparison request failed with ${response.status}`);
+        const result = await response.json() as CompetitiveIntelligenceResponse;
+        if (!cancelled) setComparison(result);
+      } catch (loadError) {
+        console.error(loadError);
+        if (!cancelled) setComparisonError('Could not load the competitive evidence right now.');
+      } finally {
+        if (!cancelled) setComparisonLoading(false);
+      }
+
+      attempts += 1;
+      if (!cancelled && attempts < 8) timer = setTimeout(() => loadComparison(false), 15000);
+    };
+
+    loadComparison(true);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [currentEntity?.id, userToken, competitorSignature, windowDays]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -124,7 +180,61 @@ export default function CompetitorsPage() {
           </p>
         </Card>
       ) : (
-        <CompetitorComparisonMatrix primaryEntity={currentEntity} primaryRiskScore={finalRiskScore} competitors={competitorsData} />
+        <>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h1 className="text-lg font-semibold text-slate-950 dark:text-white">Competitive intelligence</h1>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Compare market conversation, sentiment, risk, sources, and complaint themes using traceable mention evidence.
+              </p>
+            </div>
+            <div className="inline-flex self-start rounded-xl border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-800" aria-label="Comparison window">
+              {([7, 30, 90] as const).map((days) => (
+                <button
+                  type="button"
+                  key={days}
+                  onClick={() => setWindowDays(days)}
+                  aria-pressed={windowDays === days}
+                  className={`min-h-9 rounded-lg px-3 text-xs font-semibold transition-colors ${windowDays === days ? 'bg-slate-950 text-white dark:bg-blue-600' : 'text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700'}`}
+                >
+                  {days} days
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {comparisonLoading && !comparison ? (
+            <Card hover={false} className="flex min-h-72 flex-col items-center justify-center gap-3 text-center">
+              <Loader2 aria-hidden="true" className="h-7 w-7 animate-spin text-blue-600" />
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Building the market comparison…</p>
+                <p className="mt-1 text-xs text-slate-400">Aggregating traceable evidence for the last {windowDays} days.</p>
+              </div>
+            </Card>
+          ) : comparisonError && !comparison ? (
+            <Card hover={false} className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
+              <RefreshCw aria-hidden="true" className="h-6 w-6 text-slate-400" />
+              <p role="alert" className="text-sm text-rose-600 dark:text-rose-400">{comparisonError}</p>
+              <p className="text-xs text-slate-400">The page will retry automatically while the backend wakes up.</p>
+            </Card>
+          ) : comparison ? (
+            <CompetitiveIntelligenceDashboard
+              data={comparison}
+              onInspect={(entity, filters, title) => setEvidenceView({ entity, filters, title })}
+            />
+          ) : (
+            <CompetitorComparisonMatrix primaryEntity={currentEntity} primaryRiskScore={finalRiskScore} competitors={competitorsData} />
+          )}
+        </>
+      )}
+
+      {evidenceView && (
+        <CompetitorMentionsModal
+          competitor={{ id: evidenceView.entity.id, name: evidenceView.entity.name }}
+          filters={evidenceView.filters}
+          title={evidenceView.title}
+          onClose={() => setEvidenceView(null)}
+        />
       )}
     </div>
   );

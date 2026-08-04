@@ -3,7 +3,7 @@ from services.search_service import fetch_entity_context
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from threading import Lock
 import os
 import asyncio
@@ -203,6 +203,198 @@ def _get_active_pipeline_run(entity_id: str) -> dict | None:
         logging.error("Active pipeline lookup failed for %s: %s", entity_id, exc)
         raise HTTPException(status_code=500, detail="Could not verify analysis status") from exc
     return (result.data or [None])[0]
+
+
+COMPETITIVE_WINDOWS = {7, 30, 90}
+
+
+def _parse_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
+
+def _pct(part: int, whole: int) -> float:
+    return round((part / whole) * 100, 1) if whole else 0.0
+
+
+def _build_competitive_intelligence(
+    primary_entity_id: str,
+    entities: list[dict],
+    mentions: list[dict],
+    sentiments: list[dict],
+    risk_snapshots: list[dict],
+    window_days: int,
+    period_start: datetime,
+    period_end: datetime,
+) -> dict:
+    """Build comparison metrics from bounded database rows."""
+    entity_ids = [str(entity["id"]) for entity in entities]
+    sentiment_by_mention = {
+        str(row["mention_id"]): row for row in sentiments if row.get("mention_id")
+    }
+    mentions_by_entity = defaultdict(list)
+    for mention in mentions:
+        entity_key = str(mention.get("entity_id"))
+        if entity_key in entity_ids:
+            mentions_by_entity[entity_key].append(mention)
+
+    risk_by_entity = defaultdict(list)
+    for snapshot in risk_snapshots:
+        entity_key = str(snapshot.get("entity_id"))
+        if entity_key in entity_ids:
+            risk_by_entity[entity_key].append(snapshot)
+    for snapshots in risk_by_entity.values():
+        snapshots.sort(key=lambda row: _parse_utc(row.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
+
+    entity_counts = {}
+    total_volume = total_positive = total_negative = 0
+    for entity_id in entity_ids:
+        rows = mentions_by_entity[entity_id]
+        usable = [row for row in rows if row.get("status") != "rejected"]
+        labels = [
+            sentiment_by_mention[str(row["id"])].get("label", "neutral")
+            for row in usable if str(row.get("id")) in sentiment_by_mention
+        ]
+        counts = Counter(labels)
+        entity_counts[entity_id] = (rows, usable, counts)
+        total_volume += len(usable)
+        total_positive += counts["positive"]
+        total_negative += counts["negative"]
+
+    comparisons = []
+    for entity in entities:
+        entity_id = str(entity["id"])
+        all_rows, usable_rows, sentiment_counts = entity_counts[entity_id]
+        analyzed_count = sum(sentiment_counts.values())
+        pending_count = len(usable_rows) - analyzed_count
+
+        source_counts = Counter(
+            (row.get("platform") or row.get("source") or "unknown").strip().lower()
+            for row in usable_rows
+        )
+        category_counts = Counter()
+        daily = defaultdict(lambda: Counter({
+            "mentions": 0, "positive": 0, "neutral": 0, "negative": 0,
+        }))
+        for row in usable_rows:
+            created_at = _parse_utc(row.get("created_at"))
+            day = created_at.date().isoformat() if created_at else "unknown"
+            daily[day]["mentions"] += 1
+            sentiment = sentiment_by_mention.get(str(row.get("id")))
+            if not sentiment:
+                continue
+            label = sentiment.get("label")
+            if label in {"positive", "neutral", "negative"}:
+                daily[day][label] += 1
+            if label == "negative":
+                category_counts[sentiment.get("category") or "general"] += 1
+
+        snapshots = risk_by_entity[entity_id]
+        in_window_snapshots = [
+            row for row in snapshots
+            if (created_at := _parse_utc(row.get("created_at")))
+            and period_start <= created_at <= period_end
+        ]
+        current = snapshots[-1] if snapshots else None
+        baseline = in_window_snapshots[0] if in_window_snapshots else current
+        delta = (
+            current.get("score", 0) - baseline.get("score", 0)
+            if current and baseline else None
+        )
+        mention_base_filter = {
+            "entity_id": entity_id,
+            "created_at_gte": period_start.isoformat(),
+            "created_at_lte": period_end.isoformat(),
+            "exclude_status": "rejected",
+        }
+        risk_by_day = {}
+        for snapshot in in_window_snapshots:
+            snapshot_at = _parse_utc(snapshot.get("created_at"))
+            if snapshot_at:
+                risk_by_day[snapshot_at.date().isoformat()] = snapshot.get("score")
+        trend_days = sorted(set(daily) | set(risk_by_day))
+
+        comparisons.append({
+            "id": entity_id,
+            "name": entity.get("name"),
+            "is_primary": entity_id == str(primary_entity_id),
+            "evidence_status": (
+                "no_evidence" if not usable_rows else
+                "partial" if pending_count else "verified"
+            ),
+            "coverage_pct": _pct(analyzed_count, len(usable_rows)),
+            "counts": {
+                "mentions": len(usable_rows),
+                "analyzed": analyzed_count,
+                "pending": pending_count,
+                "positive": sentiment_counts["positive"],
+                "neutral": sentiment_counts["neutral"],
+                "negative": sentiment_counts["negative"],
+            },
+            "shares": {
+                "voice": _pct(len(usable_rows), total_volume),
+                "positive": _pct(sentiment_counts["positive"], total_positive),
+                "negative": _pct(sentiment_counts["negative"], total_negative),
+            },
+            "latest_risk": ({
+                "score": current.get("score"),
+                "status": current.get("status"),
+                "created_at": current.get("created_at"),
+            } if current else None),
+            "risk_delta": delta,
+            "source_distribution": [
+                {
+                    "source": source,
+                    "count": count,
+                    "share": _pct(count, len(usable_rows)),
+                    "filters": {**mention_base_filter, "source": source},
+                }
+                for source, count in source_counts.most_common()
+            ],
+            "top_categories": [
+                {
+                    "category": category,
+                    "count": count,
+                    "share": _pct(count, sentiment_counts["negative"]),
+                    "filters": {
+                        **mention_base_filter,
+                        "sentiment": "negative",
+                        "category": category,
+                    },
+                }
+                for category, count in category_counts.most_common(5)
+            ],
+            "trend": [
+                {
+                    "date": day,
+                    "mentions": daily[day]["mentions"],
+                    "positive": daily[day]["positive"],
+                    "neutral": daily[day]["neutral"],
+                    "negative": daily[day]["negative"],
+                    "risk_score": risk_by_day.get(day),
+                }
+                for day in trend_days
+            ],
+            "filters": {
+                "voice": mention_base_filter,
+                "positive": {**mention_base_filter, "sentiment": "positive"},
+                "neutral": {**mention_base_filter, "sentiment": "neutral"},
+                "negative": {**mention_base_filter, "sentiment": "negative"},
+            },
+        })
+
+    return {
+        "window_days": window_days,
+        "from": period_start.isoformat(),
+        "to": period_end.isoformat(),
+        "total_mentions": total_volume,
+        "entities": comparisons,
+    }
 
 # =========================================================
 # HEALTH CHECKS
@@ -424,6 +616,100 @@ def get_entity_trust_summary(entity_id: str, user = Depends(verify_user)):
     except Exception as exc:
         logging.error("Trust summary failed for %s: %s", entity_id, exc)
         raise HTTPException(status_code=500, detail="Could not load data trust summary")
+
+
+@app.get("/entities/{entity_id}/competitive-intelligence")
+def get_competitive_intelligence(
+    entity_id: str,
+    window: int = 30,
+    user = Depends(verify_user),
+):
+    """Compare a primary entity with its linked competitors over 7/30/90 days."""
+    if window not in COMPETITIVE_WINDOWS:
+        raise HTTPException(status_code=400, detail="window must be 7, 30, or 90")
+
+    primary = _require_owned_entity(entity_id, user.id)
+    period_end = datetime.now(timezone.utc)
+    period_start = period_end - timedelta(days=window)
+    try:
+        links = (
+            supabase_admin.table("competitor_links")
+            .select("competitor_entity_id")
+            .eq("primary_entity_id", entity_id)
+            .execute()
+        ).data or []
+        competitor_ids = [
+            str(row["competitor_entity_id"])
+            for row in links if row.get("competitor_entity_id")
+        ]
+        competitors = []
+        if competitor_ids:
+            competitors = (
+                supabase_admin.table("monitored_entities")
+                .select("id, name, user_id")
+                .in_("id", competitor_ids)
+                .eq("user_id", user.id)
+                .execute()
+            ).data or []
+        entities = [
+            {"id": primary["id"], "name": primary.get("name"), "user_id": primary.get("user_id")},
+            *competitors,
+        ]
+        entity_ids = [str(entity["id"]) for entity in entities]
+
+        mentions = (
+            supabase_admin.table("mentions")
+            .select("id, entity_id, source, platform, status, created_at")
+            .in_("entity_id", entity_ids)
+            .gte("created_at", period_start.isoformat())
+            .lte("created_at", period_end.isoformat())
+            .order("created_at", desc=True)
+            .limit(10000)
+            .execute()
+        ).data or []
+        mention_ids = [str(row["id"]) for row in mentions if row.get("id")]
+        sentiments = []
+        for offset in range(0, len(mention_ids), 200):
+            batch = mention_ids[offset:offset + 200]
+            rows = (
+                supabase_admin.table("sentiment_results")
+                .select("mention_id, label, category")
+                .in_("mention_id", batch)
+                .execute()
+            ).data or []
+            sentiments.extend(rows)
+
+        risk_snapshots = (
+            supabase_admin.table("risk_scores")
+            .select("entity_id, score, status, created_at")
+            .in_("entity_id", entity_ids)
+            .gte("created_at", period_start.isoformat())
+            .lte("created_at", period_end.isoformat())
+            .order("created_at", desc=True)
+            .limit(5000)
+            .execute()
+        ).data or []
+
+        response = _build_competitive_intelligence(
+            primary_entity_id=entity_id,
+            entities=entities,
+            mentions=mentions,
+            sentiments=sentiments,
+            risk_snapshots=risk_snapshots,
+            window_days=window,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        response["truncated"] = {
+            "mentions": len(mentions) >= 10000,
+            "risk_snapshots": len(risk_snapshots) >= 5000,
+        }
+        return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.error("Competitive intelligence failed for %s: %s", entity_id, exc)
+        raise HTTPException(status_code=500, detail="Could not load competitive intelligence")
 
 
 @app.put("/notification-preferences")

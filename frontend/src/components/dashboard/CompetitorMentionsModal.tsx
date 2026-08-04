@@ -5,13 +5,16 @@ import { useEffect, useRef, useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import MentionFeed from './MentionFeed';
+import type { ComparisonFilters } from './CompetitiveIntelligenceDashboard';
 
 interface CompetitorMentionsModalProps {
   competitor: { id: string; name: string };
   onClose: () => void;
+  filters?: ComparisonFilters | null;
+  title?: string;
 }
 
-export default function CompetitorMentionsModal({ competitor, onClose }: CompetitorMentionsModalProps) {
+export default function CompetitorMentionsModal({ competitor, onClose, filters, title }: CompetitorMentionsModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mentions, setMentions] = useState<any[]>([]);
@@ -35,11 +38,17 @@ export default function CompetitorMentionsModal({ competitor, onClose }: Competi
         // Competitors are entities owned by the same user, so RLS lets us read
         // their mentions with the current session — same fetch/merge the
         // dashboard uses for the primary entity.
-        const { data: fetchedMentions, error: mentionsError } = await supabase
+        let mentionQuery = supabase
           .from('mentions')
           .select('*')
           .eq('entity_id', competitor.id)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(500);
+
+        if (filters?.created_at_gte) mentionQuery = mentionQuery.gte('created_at', filters.created_at_gte);
+        if (filters?.created_at_lte) mentionQuery = mentionQuery.lte('created_at', filters.created_at_lte);
+
+        const { data: fetchedMentions, error: mentionsError } = await mentionQuery;
 
         if (mentionsError) throw mentionsError;
 
@@ -51,10 +60,20 @@ export default function CompetitorMentionsModal({ competitor, onClose }: Competi
         const sentimentMap = Object.fromEntries(
           (sentimentRows || []).map((s: any) => [s.mention_id, s])
         );
-        const merged = (fetchedMentions || []).map((m: any) => ({
-          ...m,
-          sentiment_results: sentimentMap[m.id] ? [sentimentMap[m.id]] : [],
-        }));
+        const merged = (fetchedMentions || [])
+          .map((m: any) => ({
+            ...m,
+            sentiment_results: sentimentMap[m.id] ? [sentimentMap[m.id]] : [],
+          }))
+          .filter((mention: any) => {
+            if (filters?.exclude_status && mention.status === filters.exclude_status) return false;
+            const source = String(mention.platform || mention.source || '').toLowerCase();
+            if (filters?.source && source !== filters.source.toLowerCase()) return false;
+            const sentiment = mention.sentiment_results?.[0];
+            if (filters?.sentiment && sentiment?.label !== filters.sentiment) return false;
+            if (filters?.category && sentiment?.category !== filters.category) return false;
+            return true;
+          });
 
         if (isMounted) {
           setMentions(merged);
@@ -71,7 +90,7 @@ export default function CompetitorMentionsModal({ competitor, onClose }: Competi
 
     load();
     return () => { isMounted = false; };
-  }, [competitor.id]);
+  }, [competitor.id, filters]);
 
   return (
     <div
@@ -87,8 +106,8 @@ export default function CompetitorMentionsModal({ competitor, onClose }: Competi
       >
         <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-slate-700">
           <div>
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{competitor.name}</h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Competitor mention feed</p>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{title || competitor.name}</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Evidence behind this comparison metric</p>
           </div>
           <button
             ref={closeRef}

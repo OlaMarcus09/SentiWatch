@@ -1,6 +1,6 @@
 # SentiWatch Handoff
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04
 
 ## Current state
 
@@ -9,9 +9,9 @@ scoring correctness, ingestion deduplication, bounded queries, tenant security,
 cost controls, durable scheduled processing, reproducible schema setup,
 notifications, deployment checks, and browser/API security headers.
 
-Local verification is green:
+Local verification is green for the current competitive-intelligence slice:
 
-- 12 backend integrity tests pass.
+- 20 backend integrity tests pass.
 - Python compilation passes.
 - Frontend ESLint passes.
 - Next.js production build and TypeScript pass.
@@ -41,17 +41,24 @@ future environments.
 
 ## Current handoff
 
-The latest reliability fix is pushed to `origin/main` at commit `3d37e3c`.
+The Data Trust and evidence workflow is pushed to `origin/main` at commit
+`705ab69`. The current worktree adds the next roadmap slice: authenticated
+7/30/90-day competitive intelligence with share of voice, positive/negative
+share, mention and risk trends, source/category comparisons, partial-evidence
+states, and mention-level drill-downs.
 The product direction and active backlog are maintained in
 [`PRODUCT_ROADMAP.md`](PRODUCT_ROADMAP.md).
 
-1. Deploy the latest `3d37e3c` backend/workflow changes and run the pipeline once.
-2. Confirm the one-time `pipeline_runs` grants from
+1. Commit and push the competitive-intelligence slice after final build checks.
+2. Deploy the latest backend/frontend changes and run the pipeline once.
+3. Confirm the one-time `pipeline_runs` grants from
    `scripts/2026-08-03_pipeline_runtime_grants.sql` are applied.
-3. Deploy and smoke-test the completed Data Trust Center, evidence drawer,
+4. Smoke-test the Data Trust Center, evidence drawer,
    source freshness, and manual analysis control.
-4. Implement competitor share-of-voice and historical comparisons (roadmap Next).
-5. Configure a verified Resend sending domain instead of relying on
+5. Smoke-test competitive window switching, evidence states, metric drill-downs,
+   and mobile layouts.
+6. Start durable incident ownership and response workflow (roadmap Then).
+7. Configure a verified Resend sending domain instead of relying on
    `onboarding@resend.dev` for real customers.
 
 ## Important repository notes
