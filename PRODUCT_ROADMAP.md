@@ -1,6 +1,6 @@
 # SentiWatch Product Roadmap
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04
 
 ## Product thesis
 
@@ -138,10 +138,9 @@ Acceptance criteria:
 
 ## Active backlog
 
-- [ ] Add `GET /entities/{entity_id}/trust` with ownership checks and bounded aggregates.
-- [ ] Add coverage/freshness state to the dashboard and Insights page.
-- [ ] Fix pending mentions in the Insights sentiment filter.
-- [ ] Add mention evidence drawer using existing mention and sentiment columns.
-- [ ] Add manual per-entity analysis trigger and progress state.
+- [x] Add `GET /entities/{entity_id}/trust` with ownership checks and bounded aggregates.
+- [x] Add coverage/freshness state to the dashboard and Insights page.
+- [x] Fix pending mentions in the Insights sentiment filter.
+- [x] Add mention evidence drawer using existing mention and sentiment columns.
+- [x] Add manual per-entity analysis trigger and progress state.
 - [ ] Add 7/30/90-day competitor share-of-voice queries.
-

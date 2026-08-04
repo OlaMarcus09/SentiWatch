@@ -98,6 +98,7 @@ MAX_COMPETITORS_PER_ENTITY = max(1, int(os.getenv("MAX_COMPETITORS_PER_ENTITY", 
 USER_MUTATION_LIMIT_PER_MINUTE = max(1, int(os.getenv("USER_MUTATION_LIMIT_PER_MINUTE", "10")))
 _mutation_windows = defaultdict(deque)
 _mutation_lock = Lock()
+_pipeline_schedule_lock = Lock()
 
 # =========================================================
 # AUTH DEPENDENCIES
@@ -183,6 +184,25 @@ def _require_owned_entity(entity_id: str, user_id: str) -> dict:
     if str(entity.get("user_id")) != str(user_id):
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
+
+
+def _get_active_pipeline_run(entity_id: str) -> dict | None:
+    """Return the entity's newest unexpired pipeline lease, if one exists."""
+    try:
+        result = (
+            supabase_admin.table("pipeline_runs")
+            .select("id, status, stage, started_at, updated_at, lease_expires_at")
+            .eq("entity_id", entity_id)
+            .eq("status", "running")
+            .gt("lease_expires_at", datetime.now(timezone.utc).isoformat())
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        logging.error("Active pipeline lookup failed for %s: %s", entity_id, exc)
+        raise HTTPException(status_code=500, detail="Could not verify analysis status") from exc
+    return (result.data or [None])[0]
 
 # =========================================================
 # HEALTH CHECKS
@@ -297,9 +317,60 @@ def get_entity_trust_summary(entity_id: str, user = Depends(verify_user)):
                 item["analyzed"] += 1
             elif row["id"] not in rejected_ids:
                 item["pending"] += 1
-            evidence_at = row.get("published_at") or row.get("created_at")
+            # Source freshness measures when SentiWatch most recently received
+            # evidence. An old article collected today still proves the
+            # connector is active, even though its publication date is old.
+            evidence_at = row.get("created_at")
             if evidence_at and (not item["latest_at"] or evidence_at > item["latest_at"]):
                 item["latest_at"] = evidence_at
+
+        now = datetime.now(timezone.utc)
+
+        def add_freshness(item):
+            latest_at = item.get("latest_at")
+            if not latest_at:
+                return {**item, "freshness_status": "no_data", "age_hours": None}
+            try:
+                latest_evidence = datetime.fromisoformat(
+                    str(latest_at).replace("Z", "+00:00")
+                )
+                if latest_evidence.tzinfo is None:
+                    latest_evidence = latest_evidence.replace(tzinfo=timezone.utc)
+                age_hours = max(0, round((now - latest_evidence).total_seconds() / 3600))
+            except (TypeError, ValueError):
+                return {**item, "freshness_status": "no_data", "age_hours": None}
+
+            if age_hours <= 24:
+                freshness_status = "fresh"
+            elif age_hours <= 72:
+                freshness_status = "aging"
+            else:
+                freshness_status = "stale"
+            return {
+                **item,
+                "freshness_status": freshness_status,
+                "age_hours": age_hours,
+            }
+
+        sources = [add_freshness(item) for item in source_map.values()]
+        freshest_source = min(
+            (source for source in sources if source["age_hours"] is not None),
+            key=lambda source: source["age_hours"],
+            default=None,
+        )
+        stale_sources = sum(
+            source["freshness_status"] == "stale" for source in sources
+        )
+        if not sources or not freshest_source:
+            freshness_status = "no_data"
+        elif stale_sources == len(sources):
+            freshness_status = "stale"
+        elif stale_sources:
+            freshness_status = "mixed"
+        elif any(source["freshness_status"] == "aging" for source in sources):
+            freshness_status = "aging"
+        else:
+            freshness_status = "fresh"
 
         latest_runs = (
             supabase_admin.table("pipeline_runs")
@@ -337,8 +408,14 @@ def get_entity_trust_summary(entity_id: str, user = Depends(verify_user)):
                 "inconsistent": inconsistent,
             },
             "latest_pipeline": latest_run,
+            "freshness": {
+                "status": freshness_status,
+                "latest_at": freshest_source["latest_at"] if freshest_source else None,
+                "stale_sources": stale_sources,
+                "total_sources": len(sources),
+            },
             "sources": sorted(
-                source_map.values(), key=lambda item: item["collected"], reverse=True
+                sources, key=lambda item: item["collected"], reverse=True
             ),
             "truncated": total >= 5000,
         }
@@ -509,6 +586,7 @@ async def run_analysis_pipeline(
     social_handle: str | None = None,
     run_id: str | None = None,
     worker_token: str | None = None,
+    is_recovery: bool = False,
 ):
     """
     Executes the heavy scraping and Groq AI tasks in the background.
@@ -516,7 +594,7 @@ async def run_analysis_pipeline(
     """
     if run_id:
         _record_pipeline_run(
-            entity_id, "running", "recovering", run_id=run_id,
+            entity_id, "running", "recovering" if is_recovery else "starting", run_id=run_id,
             worker_token=worker_token,
         )
     else:
@@ -656,6 +734,62 @@ def trigger_analysis(
     return {"status": "Analysis Complete", "mentions_scored": result}
 
 
+@app.post("/entities/{entity_id}/analyze")
+def trigger_owned_entity_analysis(
+    entity_id: str,
+    background_tasks: BackgroundTasks,
+    user = Depends(enforce_user_mutation_limit),
+):
+    """Queue a full analysis pipeline for an entity owned by the caller."""
+    entity = _require_owned_entity(entity_id, user.id)
+
+    # Reserve the run before returning so rapid repeat clicks cannot enqueue
+    # duplicate provider work in this application process.
+    with _pipeline_schedule_lock:
+        active_run = _get_active_pipeline_run(entity_id)
+        if active_run:
+            return {
+                "status": "already_running",
+                "scheduled": False,
+                "entity_id": entity_id,
+                "pipeline_run": active_run,
+            }
+
+        worker_token = str(uuid.uuid4())
+        run_id = _record_pipeline_run(
+            entity_id,
+            "running",
+            "starting",
+            brand_name=entity["name"],
+            profile_type=entity["profile_type"],
+            social_handle=entity.get("social_handle"),
+            worker_token=worker_token,
+        )
+        if not run_id:
+            raise HTTPException(status_code=500, detail="Could not schedule analysis")
+
+        background_tasks.add_task(
+            run_analysis_pipeline,
+            entity_id,
+            entity["name"],
+            entity["profile_type"],
+            entity.get("social_handle"),
+            run_id,
+            worker_token,
+        )
+
+    return {
+        "status": "scheduled",
+        "scheduled": True,
+        "entity_id": entity_id,
+        "pipeline_run": {
+            "id": run_id,
+            "status": "running",
+            "stage": "starting",
+        },
+    }
+
+
 @app.post("/internal/reprocess-sentiment/{entity_id}", dependencies=[Depends(verify_internal_key)])
 def trigger_sentiment_reprocess(entity_id: str, limit: int = 100):
     if limit < 1 or limit > 500:
@@ -695,6 +829,7 @@ def recover_stale_pipelines(background_tasks: BackgroundTasks, limit: int = 10):
             run.get("social_handle"),
             run["id"],
             run.get("worker_token"),
+            True,
         )
     return {
         "status": "Recovery Scheduled",

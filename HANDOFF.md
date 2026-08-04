@@ -48,8 +48,9 @@ The product direction and active backlog are maintained in
 1. Deploy the latest `3d37e3c` backend/workflow changes and run the pipeline once.
 2. Confirm the one-time `pipeline_runs` grants from
    `scripts/2026-08-03_pipeline_runtime_grants.sql` are applied.
-3. Build the Data Trust Center and evidence-backed mention drawer (roadmap Now).
-4. Then implement competitor share-of-voice and historical comparisons.
+3. Deploy and smoke-test the completed Data Trust Center, evidence drawer,
+   source freshness, and manual analysis control.
+4. Implement competitor share-of-voice and historical comparisons (roadmap Next).
 5. Configure a verified Resend sending domain instead of relying on
    `onboarding@resend.dev` for real customers.
 

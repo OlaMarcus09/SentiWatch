@@ -4,6 +4,7 @@ import types
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
@@ -72,6 +73,86 @@ class ReputationIntegrityTests(unittest.TestCase):
         with self.assertRaises(api_main.HTTPException) as context:
             api_main.verify_user("Basic token")
         self.assertEqual(context.exception.status_code, 401)
+
+    def test_manual_analysis_schedules_owned_entity_once(self):
+        background_tasks = MagicMock()
+        entity = {
+            "id": "entity-a",
+            "name": "Example",
+            "profile_type": "business",
+            "social_handle": "@example",
+            "user_id": "user-a",
+        }
+
+        with patch.object(api_main, "_require_owned_entity", return_value=entity) as require_owned, patch.object(
+            api_main, "_get_active_pipeline_run", return_value=None
+        ), patch.object(api_main, "_record_pipeline_run", return_value="run-a"):
+            result = api_main.trigger_owned_entity_analysis(
+                "entity-a",
+                background_tasks,
+                user=SimpleNamespace(id="user-a"),
+            )
+
+        self.assertTrue(result["scheduled"])
+        self.assertEqual(result["pipeline_run"]["id"], "run-a")
+        require_owned.assert_called_once_with("entity-a", "user-a")
+        background_tasks.add_task.assert_called_once()
+        task_args = background_tasks.add_task.call_args.args
+        self.assertIs(task_args[0], api_main.run_analysis_pipeline)
+        self.assertEqual(task_args[1:5], ("entity-a", "Example", "business", "@example"))
+        self.assertEqual(task_args[5], "run-a")
+
+    def test_manual_analysis_does_not_duplicate_active_run(self):
+        background_tasks = MagicMock()
+        active_run = {
+            "id": "run-active",
+            "status": "running",
+            "stage": "analyzing_sentiment",
+            "lease_expires_at": "2026-08-04T12:00:00+00:00",
+        }
+
+        with patch.object(
+            api_main,
+            "_require_owned_entity",
+            return_value={
+                "id": "entity-a",
+                "name": "Example",
+                "profile_type": "business",
+                "user_id": "user-a",
+            },
+        ), patch.object(api_main, "_get_active_pipeline_run", return_value=active_run), patch.object(
+            api_main, "_record_pipeline_run"
+        ) as record_run:
+            result = api_main.trigger_owned_entity_analysis(
+                "entity-a",
+                background_tasks,
+                user=SimpleNamespace(id="user-a"),
+            )
+
+        self.assertFalse(result["scheduled"])
+        self.assertEqual(result["status"], "already_running")
+        self.assertEqual(result["pipeline_run"], active_run)
+        record_run.assert_not_called()
+        background_tasks.add_task.assert_not_called()
+
+    def test_manual_analysis_requires_entity_ownership(self):
+        background_tasks = MagicMock()
+
+        with patch.object(
+            api_main,
+            "_require_owned_entity",
+            side_effect=api_main.HTTPException(status_code=404, detail="Entity not found"),
+        ), patch.object(api_main, "_get_active_pipeline_run") as active_lookup:
+            with self.assertRaises(api_main.HTTPException) as context:
+                api_main.trigger_owned_entity_analysis(
+                    "entity-a",
+                    background_tasks,
+                    user=SimpleNamespace(id="user-b"),
+                )
+
+        self.assertEqual(context.exception.status_code, 404)
+        active_lookup.assert_not_called()
+        background_tasks.add_task.assert_not_called()
 
     def test_entity_payload_rejects_more_than_three_competitors(self):
         with self.assertRaises(Exception):
