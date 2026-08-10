@@ -48,7 +48,6 @@ export default function CompetitorsPage() {
 
   useEffect(() => {
     if (!currentEntity?.id || !userToken || !competitorSignature) {
-      setComparison(null);
       return;
     }
 
