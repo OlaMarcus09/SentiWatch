@@ -283,7 +283,8 @@ def calculate_entity_score(mentions):
             "root_cause_summary": "No data available."
         }
 
-    raw_score = 0
+    negative_raw_score = 0
+    non_negative_raw_score = 0
     negatives = 0
     positives = 0
     neutrals = 0
@@ -331,7 +332,7 @@ def calculate_entity_score(mentions):
         else:
             neutrals += 1
 
-        raw_score += mention_score(
+        contribution = mention_score(
             sentiment=sentiment,
             severity=severity,
             confidence=mention.get("confidence", 0.8),
@@ -340,8 +341,17 @@ def calculate_entity_score(mentions):
             risk=risk_level,
             created_at=mention.get("created_at")
         )
+        if sentiment == "negative":
+            negative_raw_score += contribution
+        else:
+            # Positive contributions are signed offsets; neutral contributes 0.
+            # Negative-volume escalation must not amplify either one.
+            non_negative_raw_score += contribution
 
-    raw_score *= volume_multiplier(negatives)
+    raw_score = (
+        negative_raw_score * volume_multiplier(negatives)
+        + non_negative_raw_score
+    )
     final_score = normalize(raw_score)
 
     # Build root cause summary

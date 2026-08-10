@@ -25,6 +25,10 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
+RELEVANCE_RELEVANT = "relevant"
+RELEVANCE_IRRELEVANT = "irrelevant"
+RELEVANCE_NEEDS_REVIEW = "needs_review"
+
 SYSTEM_PROMPT = """
 You are SentiWatch AI, an expert Brand Reputation Intelligence Analyst for the Nigerian market.
 Task: Analyze if the text damages or enhances brand trust. Identify the root cause.
@@ -34,7 +38,7 @@ Output: Return ONLY valid JSON. No markdown formatting.
 Schema:
 {
     "sentiment": "positive|neutral|negative",
-    "category": "fraud|regulatory|customer_praise|customer_complaint|product_quality|operations|cyber|security|financial|leadership|general",
+    "category": "fraud|legal|regulatory|customer_service|customer_praise|customer_complaint|product_quality|operations|cyber|security|financial|leadership|general",
     "sub_category": "fund_lockup|delivery_delay|security_breach|service_speed|pricing|competitor_mention|award|partnership|reputation_attack|general",
     "severity": 1-10,
     "confidence": 0.0-1.0,
@@ -243,7 +247,7 @@ def get_unprocessed_mentions(entity_id: str = None, limit: int = 20):
     mentions_res = query.order("created_at", desc=True).limit(limit * 5).execute()
     candidates = [
         mention for mention in (mentions_res.data or [])
-        if mention.get("status") not in {"rejected", "processed"}
+        if mention.get("status") not in {"rejected", "processed", "needs_review"}
     ]
     if not candidates:
         return []
@@ -281,11 +285,10 @@ def _llm_relevance_check(
     brand_name: str,
     profile_type: str = "business",
     competitors: list = None,
-) -> bool:
+) -> str:
     """
-    LLM judge stage. Returns True if the model is confident the text is about
-    the entity. Fails OPEN (returns True) on any error so a gateway outage
-    never silently drops the whole batch.
+    LLM judge stage. Returns an explicit tri-state relevance decision so
+    provider failures remain visible and never silently enter scoring.
     """
     competitors = competitors or []
     comp_line = f"\nKnown competitors (do not confuse with the entity): {', '.join(competitors)}" if competitors else ""
@@ -301,18 +304,20 @@ def _llm_relevance_check(
             model=llm_client.RELEVANCE_MODEL,
             temperature=0,
         )
-        relevant = bool(result.get("relevant", True))
+        if not isinstance(result.get("relevant"), bool):
+            raise ValueError("Relevance response did not include a boolean decision")
+        relevant = result["relevant"]
         confidence = float(result.get("confidence", 0.0))
         if not relevant or confidence < 0.6:
             logging.info(
                 "Relevance rejected (%.2f): %s",
                 confidence, str(result.get("reason", ""))[:120],
             )
-            return False
-        return True
+            return RELEVANCE_IRRELEVANT
+        return RELEVANCE_RELEVANT
     except Exception as e:
-        logging.warning("Relevance LLM check failed, failing open: %s", e)
-        return True
+        logging.warning("Relevance LLM check failed; routing to review: %s", e)
+        return RELEVANCE_NEEDS_REVIEW
 
 
 def is_relevant(
@@ -320,7 +325,7 @@ def is_relevant(
     brand_name: str,
     profile_type: str = "business",
     competitors: list = None,
-) -> bool:
+) -> str:
     """
     Two-stage gatekeeper that blocks junk mentions before full analysis.
 
@@ -330,7 +335,7 @@ def is_relevant(
 
     # ── Stage 1: cheap prefilter ──
     if len(text.strip()) < 15:
-        return False
+        return RELEVANCE_IRRELEVANT
 
     # Must actually mention the brand (case-insensitive).
     # Normalize spacing on both sides so an entity named "AprokoDoctor"
@@ -339,7 +344,7 @@ def is_relevant(
         brand_norm = brand_name.lower().replace(" ", "")
         text_norm = text.lower().replace(" ", "")
         if brand_norm not in text_norm:
-            return False
+            return RELEVANCE_IRRELEVANT
 
     # ── Stage 2: LLM semantic judge ──
     return _llm_relevance_check(text, brand_name, profile_type, competitors)
@@ -485,7 +490,7 @@ def analyze_and_store_sentiment(
         logging.error("No LLM provider configured (set AGENTROUTER_* or GROQ_API_KEY)")
         return {"processed": 0, "failed": 0}
 
-    processed, failed = 0, 0
+    processed, failed, needs_review = 0, 0, 0
 
     # Load persona + competitors once to sharpen the relevance gate.
     profile_type, competitors = _fetch_entity_context(entity_id)
@@ -547,7 +552,13 @@ def analyze_and_store_sentiment(
         mention_id = mention["id"]
         text = mention.get("content", "")
 
-        if not is_relevant(text, brand_name, profile_type, competitors):
+        relevance = is_relevant(text, brand_name, profile_type, competitors)
+        if relevance == RELEVANCE_NEEDS_REVIEW:
+            logging.warning("Mention %s needs manual relevance review", mention_id)
+            _set_mention_status(mention_id, "needs_review")
+            needs_review += 1
+            continue
+        if relevance == RELEVANCE_IRRELEVANT:
             logging.info(f"Skipped irrelevant mention {mention_id}")
             _set_mention_status(mention_id, "rejected")
             continue
@@ -570,8 +581,14 @@ def analyze_and_store_sentiment(
             logging.error(f"Failed analysis for {mention_id}: {e}")
             failed += 1
 
-    logging.info(f"Done. Processed={processed}, Failed={failed}")
-    return {"processed": processed, "failed": failed}
+    logging.info(
+        "Done. Processed=%s, Failed=%s, NeedsReview=%s",
+        processed, failed, needs_review,
+    )
+    result = {"processed": processed, "failed": failed}
+    if needs_review:
+        result["needs_review"] = needs_review
+    return result
 
 
 if __name__ == "__main__":

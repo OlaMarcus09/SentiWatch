@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import types
 import unittest
@@ -30,6 +31,7 @@ import risk_engine  # noqa: E402
 import scrapers  # noqa: E402
 import scoring  # noqa: E402
 import sentiment  # noqa: E402
+import constants  # noqa: E402
 import main as api_main  # noqa: E402
 
 
@@ -69,6 +71,14 @@ class QueryDouble:
 
 
 class ReputationIntegrityTests(unittest.TestCase):
+    def test_every_weighted_category_is_reachable_from_sentiment_prompt(self):
+        match = re.search(r'"category": "([^"]+)"', sentiment.SYSTEM_PROMPT)
+        self.assertIsNotNone(match, "SYSTEM_PROMPT must declare its category enum")
+        prompt_categories = set(match.group(1).split("|"))
+
+        self.assertEqual(prompt_categories, constants.VALID_CATEGORIES)
+        self.assertEqual(prompt_categories, set(constants.CATEGORY_WEIGHTS))
+
     def test_authorization_header_requires_bearer_scheme(self):
         with self.assertRaises(api_main.HTTPException) as context:
             api_main.verify_user("Basic token")
@@ -346,6 +356,53 @@ class ReputationIntegrityTests(unittest.TestCase):
         self.assertIn(("entity_id", "entity-a"), candidates.filters)
         self.assertIn(("mention_id__in", ["mention-a"]), processed.filters)
 
+    def test_relevance_failure_routes_mention_to_review(self):
+        with patch.object(
+            sentiment.llm_client,
+            "chat_json",
+            side_effect=RuntimeError("provider unavailable"),
+        ):
+            decision = sentiment._llm_relevance_check(
+                "Example is mentioned in this sufficiently long report.",
+                "Example",
+            )
+
+        self.assertEqual(decision, sentiment.RELEVANCE_NEEDS_REVIEW)
+
+    def test_relevance_failure_marks_review_without_failing_batch(self):
+        with patch.object(sentiment.llm_client, "_use_agentrouter", return_value=True), patch.object(
+            sentiment, "_fetch_entity_context", return_value=("business", [])
+        ), patch.object(
+            sentiment,
+            "get_unprocessed_mentions",
+            return_value=[{"id": "mention-review", "content": "Example appears in a substantive report."}],
+        ), patch.object(
+            sentiment, "is_relevant", return_value=sentiment.RELEVANCE_NEEDS_REVIEW
+        ), patch.object(sentiment, "_set_mention_status") as set_status, patch.object(
+            sentiment, "call_groq"
+        ) as analyze:
+            result = sentiment.analyze_and_store_sentiment(
+                entity_id="entity-a", brand_name="Example", limit=1
+            )
+
+        self.assertEqual(result, {"processed": 0, "failed": 0, "needs_review": 1})
+        set_status.assert_called_once_with("mention-review", "needs_review")
+        analyze.assert_not_called()
+
+    def test_needs_review_mentions_are_not_automatically_reprocessed(self):
+        candidates = QueryDouble(data=[
+            {"id": "mention-review", "status": "needs_review"},
+            {"id": "mention-pending", "status": "pending"},
+        ])
+        processed = QueryDouble(data=[])
+        admin = MagicMock()
+        admin.table.side_effect = [candidates, processed]
+
+        with patch.object(sentiment, "supabase_admin", admin):
+            rows = sentiment.get_unprocessed_mentions("entity-a", limit=20)
+
+        self.assertEqual([row["id"] for row in rows], ["mention-pending"])
+
     def test_sentiment_pipeline_uses_configured_batch_limit(self):
         with patch.object(sentiment, "GROQ_API_KEY", "test-groq-key"), patch.object(
             sentiment, "_fetch_entity_context", return_value=("business", [])
@@ -379,6 +436,73 @@ class ReputationIntegrityTests(unittest.TestCase):
         negative_only = scoring.calculate_entity_score([negative])["score"]
         balanced = scoring.calculate_entity_score([negative, positive])["score"]
         self.assertLess(balanced, negative_only)
+
+    def test_negative_volume_increases_risk(self):
+        negative = {
+            "label": "negative", "severity": 5, "confidence": 1,
+            "source": "reddit", "category": "general", "risk_level": "medium",
+        }
+
+        one_negative = scoring.calculate_entity_score([negative])["score"]
+        five_negatives = scoring.calculate_entity_score([negative] * 5)["score"]
+
+        self.assertGreater(five_negatives, one_negative)
+
+    def test_positive_only_volume_does_not_create_risk(self):
+        positive = {
+            "label": "positive", "severity": 5, "confidence": 1,
+            "source": "reddit", "category": "customer_praise", "risk_level": "low",
+        }
+
+        self.assertEqual(scoring.calculate_entity_score([positive] * 50)["score"], 0)
+
+    def test_negative_volume_multiplier_does_not_amplify_positive_offsets(self):
+        positive = {
+            "label": "positive", "severity": 5, "confidence": 1,
+            "source": "reddit", "category": "customer_praise", "risk_level": "low",
+        }
+        negative = {
+            "label": "negative", "severity": 2, "confidence": 1,
+            "source": "reddit", "category": "general", "risk_level": "low",
+        }
+        stronger_negative = {
+            **negative,
+            "severity": 1,
+            "confidence": 0.7,
+            "source": "other",
+        }
+        moderate_positive = {
+            **positive,
+            "severity": 3,
+            "confidence": 0.8,
+            "source": "other",
+        }
+
+        positive_heavy = scoring.calculate_entity_score([positive] * 50 + [negative])["score"]
+        mixed = scoring.calculate_entity_score([moderate_positive] * 2 + [stronger_negative] * 5)["score"]
+        negative_heavy = scoring.calculate_entity_score([stronger_negative] * 5)["score"]
+
+        self.assertEqual(positive_heavy, 0)
+        self.assertGreater(mixed, positive_heavy)
+        self.assertGreater(negative_heavy, mixed)
+
+    def test_volume_multiplier_scales_only_negative_contributions(self):
+        mentions = [
+            {"label": "negative", "category": "general"},
+            {"label": "negative", "category": "general"},
+            {"label": "negative", "category": "general"},
+            {"label": "positive", "category": "customer_praise"},
+        ]
+
+        def fixed_contribution(**kwargs):
+            return 10 if kwargs["sentiment"] == "negative" else -10
+
+        with patch.object(scoring, "mention_score", side_effect=fixed_contribution):
+            score = scoring.calculate_entity_score(mentions)["score"]
+
+        # Correct: (3 * 10 * 1.15) + -10 = 24.5 -> round(24.5) == 24.
+        # Old scope: ((3 * 10) + -10) * 1.15 = 23.
+        self.assertEqual(score, 24)
 
     def test_email_alert_is_not_repeated_above_threshold(self):
         with patch.object(risk_engine.resend.Emails, "send") as send:

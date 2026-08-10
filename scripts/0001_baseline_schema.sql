@@ -39,7 +39,7 @@ create table if not exists public.mentions (
   source text not null,
   content text not null,
   url text,
-  status text check (status is null or status in ('pending', 'processed', 'rejected')),
+  status text check (status is null or status in ('pending', 'processed', 'rejected', 'needs_review')),
   platform text,
   source_post_id text,
   source_comment_id text,

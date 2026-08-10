@@ -13,7 +13,7 @@ alter table public.mentions
 
 alter table public.mentions
   add constraint mentions_status_check
-  check (status is null or status in ('pending', 'processed', 'rejected'));
+  check (status is null or status in ('pending', 'processed', 'rejected', 'needs_review'));
 
 -- A URL may be relevant to more than one tracked entity. Replace any old
 -- URL-only uniqueness rule with entity-scoped identity. Adjust the first drop
