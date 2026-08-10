@@ -239,14 +239,14 @@ class ReputationIntegrityTests(unittest.TestCase):
             api_main,
             "_require_owned_entity",
             side_effect=api_main.HTTPException(status_code=404, detail="Entity not found"),
-        ), patch.object(api_main.supabase_admin, "table") as table:
+        ), patch.object(api_main, "supabase_admin", MagicMock()) as admin:
             with self.assertRaises(api_main.HTTPException) as context:
                 api_main.get_competitive_intelligence(
                     "entity-a", window=30, user=SimpleNamespace(id="user-b")
                 )
 
         self.assertEqual(context.exception.status_code, 404)
-        table.assert_not_called()
+        admin.table.assert_not_called()
 
     def test_mention_deduplication_is_scoped_to_entity(self):
         lookup = QueryDouble(data=[])
