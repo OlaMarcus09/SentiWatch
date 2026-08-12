@@ -197,10 +197,10 @@ def run_automated_pipeline():
             summary.failed,
             summary.total,
         )
-        if summary.failed:
-         #   raise PipelineRunError(
-         #       f"Pipeline failed for {summary.failed} of {summary.total} entities"
-         #   )
+        if summary.failed > 0:
+    logger.warning(f"Pipeline completed with {summary.failed} failure(s) out of {summary.total}.")
+    # pass
+
         return summary
 
     except Exception as e:
