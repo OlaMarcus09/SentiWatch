@@ -37,8 +37,10 @@ RELEVANCE_MODEL = os.getenv("RELEVANCE_MODEL", DEFAULT_GROQ_MODEL)
 SENTIMENT_MODEL = os.getenv("SENTIMENT_MODEL", DEFAULT_GROQ_MODEL)
 RECOMMENDATION_MODEL = os.getenv("RECOMMENDATION_MODEL", DEFAULT_GROQ_MODEL)
 
-MAX_RETRIES = max(1, int(os.getenv("LLM_MAX_RETRIES", "2")))
+MAX_RETRIES = max(1, int(os.getenv("LLM_MAX_RETRIES", "3")))
 REQUEST_TIMEOUT_SECONDS = max(5, int(os.getenv("LLM_REQUEST_TIMEOUT", "15")))
+RETRYABLE_STATUS_CODES = {429, 500, 503}
+BACKOFF_BASE_SECONDS = max(0.1, float(os.getenv("LLM_BACKOFF_BASE_SECONDS", "1")))
 
 
 def _use_agentrouter() -> bool:
@@ -77,6 +79,20 @@ def _get_groq_client():
     return _groq_client
 
 
+def _http_status_code(exc: Exception) -> int | None:
+    """Extract an HTTP status from OpenAI/Groq-style SDK exceptions."""
+    for value in (
+        getattr(exc, "status_code", None),
+        getattr(exc, "http_status", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def chat_json(
     system: str,
     user: str,
@@ -97,7 +113,7 @@ def chat_json(
     resolved_model = model or (SENTIMENT_MODEL if use_router else DEFAULT_GROQ_MODEL)
 
     last_err: Optional[Exception] = None
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = client.chat.completions.create(
                 model=resolved_model,
@@ -113,10 +129,18 @@ def chat_json(
             return json.loads(content)
         except Exception as e:  # noqa: BLE001 - surface after retries
             last_err = e
+            status_code = _http_status_code(e)
+            retryable = status_code in RETRYABLE_STATUS_CODES
             logging.warning(
-                "LLM attempt %d/%d failed (provider=%s, model=%s): %s",
-                attempt + 1, MAX_RETRIES, active_provider(), resolved_model, e,
+                "LLM attempt %d/%d failed (provider=%s, model=%s, status=%s, retryable=%s): %s",
+                attempt, MAX_RETRIES, active_provider(), resolved_model,
+                status_code or "unknown", retryable, e,
             )
-            time.sleep(2)
+            if not retryable:
+                raise
+            if attempt < MAX_RETRIES:
+                delay = BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                logging.info("Retrying LLM call in %.1f seconds", delay)
+                time.sleep(delay)
 
-    raise RuntimeError(f"LLM call failed after {MAX_RETRIES} retries: {last_err}")
+    raise RuntimeError(f"LLM call failed after {MAX_RETRIES} attempts: {last_err}") from last_err

@@ -81,7 +81,11 @@ export default function InsightsPage() {
   }, [trust?.latest_pipeline?.status]);
 
   const runAnalysisNow = async () => {
-    if (!currentEntity?.id || !userToken || analysisStarting) return;
+    if (!currentEntity?.id || analysisStarting) return;
+    if (!userToken) {
+      setAnalysisMessage('Your session has expired. Please sign in again, then retry analysis.');
+      return;
+    }
     setAnalysisStarting(true);
     setAnalysisMessage(null);
     try {
@@ -90,7 +94,14 @@ export default function InsightsPage() {
         headers: { Authorization: `Bearer ${userToken}` },
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.detail || 'Could not start analysis');
+      if (!response.ok) {
+        const fallback = response.status === 401
+          ? 'Your session has expired. Please sign in again, then retry analysis.'
+          : response.status === 429
+            ? 'Too many requests. Please wait a minute, then retry analysis.'
+            : 'Could not start analysis';
+        throw new Error(payload.detail || fallback);
+      }
       setAnalysisMessage(payload.scheduled
         ? 'Analysis started. Coverage will update as evidence is processed.'
         : 'Analysis is already running for this profile.');

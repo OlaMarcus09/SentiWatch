@@ -33,6 +33,8 @@ import scoring  # noqa: E402
 import sentiment  # noqa: E402
 import constants  # noqa: E402
 import main as api_main  # noqa: E402
+import cron_sync  # noqa: E402
+from services import llm_client  # noqa: E402
 
 
 class QueryDouble:
@@ -71,6 +73,107 @@ class QueryDouble:
 
 
 class ReputationIntegrityTests(unittest.TestCase):
+    def test_llm_retries_transient_http_errors_with_exponential_backoff(self):
+        class ProviderError(RuntimeError):
+            def __init__(self, status_code):
+                super().__init__(f"HTTP {status_code}")
+                self.status_code = status_code
+
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))]
+        )
+        client = MagicMock()
+        for status_code in (429, 500, 503):
+            with self.subTest(status_code=status_code):
+                client.reset_mock()
+                client.chat.completions.create.side_effect = [
+                    ProviderError(status_code),
+                    response,
+                ]
+                with patch.object(llm_client, "_use_agentrouter", return_value=False), patch.object(
+                    llm_client, "_get_groq_client", return_value=client
+                ), patch.object(llm_client, "MAX_RETRIES", 3), patch.object(
+                    llm_client, "BACKOFF_BASE_SECONDS", 1
+                ), patch.object(llm_client.time, "sleep") as sleep:
+                    result = llm_client.chat_json("system", "user")
+
+                self.assertEqual(result, {"ok": True})
+                self.assertEqual(client.chat.completions.create.call_count, 2)
+                sleep.assert_called_once_with(1)
+
+    def test_llm_backoff_doubles_between_attempts(self):
+        class ProviderError(RuntimeError):
+            status_code = 503
+
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))]
+        )
+        client = MagicMock()
+        client.chat.completions.create.side_effect = [
+            ProviderError("unavailable"),
+            ProviderError("unavailable"),
+            response,
+        ]
+
+        with patch.object(llm_client, "_use_agentrouter", return_value=False), patch.object(
+            llm_client, "_get_groq_client", return_value=client
+        ), patch.object(llm_client, "MAX_RETRIES", 3), patch.object(
+            llm_client, "BACKOFF_BASE_SECONDS", 1
+        ), patch.object(llm_client.time, "sleep") as sleep:
+            llm_client.chat_json("system", "user")
+
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+
+    def test_llm_does_not_retry_non_transient_errors(self):
+        class ProviderError(RuntimeError):
+            status_code = 400
+
+        client = MagicMock()
+        client.chat.completions.create.side_effect = ProviderError("bad request")
+
+        with patch.object(llm_client, "_use_agentrouter", return_value=False), patch.object(
+            llm_client, "_get_groq_client", return_value=client
+        ), patch.object(llm_client.time, "sleep") as sleep:
+            with self.assertRaises(ProviderError):
+                llm_client.chat_json("system", "user")
+
+        client.chat.completions.create.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_cron_partial_entity_failure_returns_summary_without_raising(self):
+        entities_query = MagicMock()
+        entities_query.select.return_value.execute.return_value.data = [
+            {"id": "entity-a", "name": "Healthy Brand", "social_handle": None},
+            {"id": "entity-b", "name": "Provider Failure", "social_handle": None},
+        ]
+        active_query = MagicMock()
+        active_query.select.return_value.eq.return_value.gt.return_value.execute.return_value.data = []
+        admin = MagicMock()
+        admin.table.side_effect = [entities_query, active_query]
+        recovery = MagicMock(status_code=200)
+        recovery.json.return_value = {"entity_ids": []}
+        stage_results = [
+            {"pipeline_run_id": "run-a", "worker_token": "token-a"}, {}, {},
+            {"pipeline_run_id": "run-b", "worker_token": "token-b"}, False,
+        ]
+
+        with patch.object(cron_sync, "INTERNAL_API_KEY", "test-key"), patch.object(
+            cron_sync, "require_supabase_admin", return_value=admin
+        ), patch.object(cron_sync, "wait_for_backend", return_value=True), patch.object(
+            cron_sync.requests, "post", return_value=recovery
+        ), patch.object(cron_sync, "_post_stage", side_effect=stage_results), patch.object(
+            cron_sync.logger, "error"
+        ) as log_error:
+            summary = cron_sync.run_automated_pipeline()
+
+        self.assertEqual(summary.total, 2)
+        self.assertEqual(summary.succeeded, 1)
+        self.assertEqual(summary.failed, 1)
+        self.assertEqual(summary.failed_entities, [
+            {"id": "entity-b", "name": "Provider Failure", "stage": "analysis"}
+        ])
+        log_error.assert_called_once()
+
     def test_every_weighted_category_is_reachable_from_sentiment_prompt(self):
         match = re.search(r'"category": "([^"]+)"', sentiment.SYSTEM_PROMPT)
         self.assertIsNotNone(match, "SYSTEM_PROMPT must declare its category enum")

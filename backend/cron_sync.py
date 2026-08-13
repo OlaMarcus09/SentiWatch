@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
@@ -16,6 +16,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
+logger = logging.getLogger(__name__)
 
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
@@ -41,6 +42,7 @@ class PipelineSummary:
     total: int = 0
     succeeded: int = 0
     failed: int = 0
+    failed_entities: list[dict] = field(default_factory=list)
 
 
 class PipelineRunError(RuntimeError):
@@ -324,6 +326,11 @@ def run_automated_pipeline():
                     )
 
                     summary.failed += 1
+                    summary.failed_entities.append({
+                        "id": entity_id,
+                        "name": name,
+                        "stage": label,
+                    })
                     break
 
                 if (
@@ -350,18 +357,13 @@ def run_automated_pipeline():
             summary.failed,
             summary.total,
         )
-
-        # Keep the pipeline successful even if individual entities failed.
-        # Uncomment the exception below if you want CI/cron to report a
-        # non-zero exit code whenever one or more entities fail.
-        if summary.failed > 0:
-            pass
-
-            # raise PipelineRunError(
-            #     f"Pipeline failed for {summary.failed} of "
-            #     f"{summary.total} entities"
-            # )
-
+        if summary.failed:
+            logger.error(
+                "Partial pipeline failure: %s of %s entities failed; successful entities were preserved. Failed entities: %s",
+                summary.failed,
+                summary.total,
+                summary.failed_entities,
+            )
         return summary
 
     except Exception as exc:
