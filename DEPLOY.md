@@ -1,176 +1,228 @@
-# SentiWatch Deployment (Render + GitHub Actions)
+# SentiWatch Deployment: Google Cloud Run
+
+This is the recommended deployment path for the FastAPI backend. Supabase,
+Vercel, Groq, Gemini, Tavily, Resend, and the hourly GitHub Actions orchestrator
+remain separate services. The existing `render.yaml` remains available as the
+rollback target.
 
 ## Production release gate
 
-For a new Supabase project, apply `scripts/0001_baseline_schema.sql` first.
-For every environment, apply all dated migrations in filename order. The
-production-readiness migration is backward-compatible with installations that
-missed the optional metadata or notification migrations. Then run the read-only
-`scripts/verify_production_schema.sql` report. Do not deploy unless every
-listed tenant table has RLS enabled, the expected policies and indexes are
-present, and the integrity query returns zero rows.
+For a new Supabase project, apply `scripts/0001_baseline_schema.sql`, followed
+by every dated migration in filename order. Confirm that
+`scripts/2026-08-28_crisis_briefs.sql` has been applied, including the composite
+risk snapshot/entity foreign key, RLS policy, indexes, and service-role grants.
+Run `scripts/verify_production_schema.sql` and require zero integrity-error rows.
 
-If an earlier production-readiness attempt failed, PostgreSQL rolled back the
-transaction. Pull the corrected migration and rerun the complete file.
+Do not run database migrations from the application container or Cloud Run
+startup command.
 
-Required production configuration now also includes:
+## 1. Google Cloud project
 
-- `ALLOWED_ORIGINS` — comma-separated exact frontend origins.
-- `SCORING_WINDOW_DAYS` — defaults to 90.
-- `MAX_SCORING_MENTIONS` — defaults to 500 per entity calculation.
-- `MAX_ENTITIES_PER_USER` — defaults to 10, including competitor entities.
-- `MAX_COMPETITORS_PER_ENTITY` — defaults to 3.
-- `USER_MUTATION_LIMIT_PER_MINUTE` — defaults to 10.
-- `SENTIMENT_BATCH_LIMIT` — defaults to 2 mentions per analysis request so
-  scheduled work remains within free-tier request limits.
-- `LLM_REQUEST_TIMEOUT` — defaults to 15 seconds per provider attempt.
-- `LLM_MAX_RETRIES` — defaults to 2 attempts per mention.
+Select a project and enable the required services:
 
-After deployment, `GET /health/ready` must return HTTP 200. The endpoint fails
-closed when the service-role key, internal key, LLM provider, or database is
-not ready.
-
-Before deploying the reputation-integrity update, run
-`scripts/2026-07-30_reputation_integrity.sql` once in the Supabase SQL editor.
-It enables entity-scoped mention deduplication, risk-score history, and durable
-background-pipeline status reporting.
-
-Run `scripts/2026-07-31_notification_preferences.sql` as well to enable the
-persisted email-alert and daily-digest controls in Settings.
-Run `scripts/2026-07-31_notification_delivery.sql` to create the in-app
-notification inbox and daily-digest delivery cursor. Schedule a daily request
-to `POST /internal/send-daily-digests` with the `X-Internal-Key` header.
-
-Run `scripts/2026-07-31_backend_hardening.sql` to enable owned recommendation
-reads and enforce unique competitor links before deploying this hardening pass.
-
-Run `scripts/2026-07-31_pipeline_recovery.sql` before deploying pipeline
-recovery and enriched social connectors. It adds pipeline leases/retry metadata,
-an atomic service-role recovery claim, and the structured mention metadata
-columns used by Reddit, YouTube, X, Facebook, and news ingestion.
-
-Railway's trial expired, so the backend now runs on **Render's free tier**
-(no credit card, never expires) and the hourly pipeline runs as a **free
-GitHub Actions scheduled workflow** instead of an always-on worker.
-
-```
-Browser ──> Vercel (Next.js frontend)
-                 │  reads Supabase directly (anon key + RLS)
-                 ▼
-             Supabase (Postgres)
-                 ▲
-   Render free web service (FastAPI)  ← wakes on request
-                 ▲
-   GitHub Actions cron (hourly) ── warms + drives the pipeline
-```
-
-Only the FastAPI backend moves. Supabase, Groq, Tavily, and Resend are all
-external services and don't change.
-
----
-
-## Part 1 — Deploy the backend to Render
-
-### 1. Create the service
-1. Go to [render.com](https://render.com) and sign up with GitHub (no card required).
-2. **New +** → **Blueprint** → pick the `SentiWatch` repo. Render reads
-   `render.yaml` at the repo root and provisions the `sentiwatch-api` web service.
-   - If you prefer manual setup instead of the blueprint: **New + → Web Service**,
-     set **Root Directory** = `backend`, **Build** = `pip install -r requirements.txt`,
-     **Start** = `uvicorn main:app --host 0.0.0.0 --port $PORT`.
-
-### 2. Set environment variables (Render dashboard → your service → Environment)
-All are marked `sync: false` in `render.yaml`, so you must enter the real values here.
-
-| Key | Required | Notes |
-|-----|----------|-------|
-| `SUPABASE_URL` | yes | Supabase project URL |
-| `SUPABASE_KEY` | yes | Supabase anon key |
-| `SUPABASE_SERVICE_ROLE` | yes | Service-role key (backend bypasses RLS) |
-| `GROQ_API_KEY` | yes | Groq LLM |
-| `TAVILY_API_KEY` | yes | Tavily web search |
-| `RESEND_API_KEY` | yes | Resend email alerts |
-| `INTERNAL_API_KEY` | **yes** | Shared secret for internal endpoints (see below) |
-| `ENABLE_MOCK_REVIEWS` | no | Leave `false` in prod |
-| `GROQ_MODEL` | no | Defaults to `llama-3.3-70b-versatile` |
-| `ALERT_EMAIL_FALLBACK` | no | Defaults to `onboarding@resend.dev` |
-| `YOUTUBE_API_KEY` | no | Enables YouTube video/comment collection |
-| `APIFY_TOKEN` | no | Enables configured X/Facebook Apify actors |
-| `APIFY_TWITTER_ACTOR` | no | Apify actor id for X/Twitter collection |
-| `APIFY_FACEBOOK_ACTOR` | no | Apify actor id for Facebook collection |
-
-### 3. Generate `INTERNAL_API_KEY`
 ```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+gcloud config set project "${PROJECT_ID}"
+gcloud services enable \
+  artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com \
+  run.googleapis.com \
+  secretmanager.googleapis.com
 ```
-Use the **same value** in Render AND in the GitHub secret (Part 2). If they
-don't match, the pipeline gets `401`s. If it's missing on Render, the internal
-endpoints return `503` (fail-closed by design).
 
-### 4. Note your backend URL
-After the first deploy you'll get a URL like `https://sentiwatch-api.onrender.com`.
-You'll need it for the frontend and the GitHub secret.
+Create an Artifact Registry repository in `europe-west1`:
 
----
+```bash
+gcloud artifacts repositories create sentiwatch \
+  --repository-format=docker \
+  --location=europe-west1 \
+  --description="SentiWatch backend images"
+```
 
-## Part 2 — Set up the hourly pipeline (GitHub Actions)
+Create a dedicated Cloud Run service account and grant it access only to the
+Secret Manager secrets listed below. Do not use owner/editor credentials as the
+runtime identity.
 
-The workflow lives at `.github/workflows/pipeline.yml`. It runs `cron_sync.py`
-every hour: it wakes the Render service, then calls the authenticated
-`/sync`, `/analyze`, and `/calculate-risk` endpoints for every entity.
+## 2. Secrets and configuration
 
-### Add repo secrets
-GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**:
+Create secret values in Google Secret Manager. Do not place secret values in
+the Dockerfile, repository, deployment guide, Cloud Build arguments, or frontend
+configuration.
 
-| Secret | Value |
-|--------|-------|
-| `BACKEND_URL` | Your Render URL, e.g. `https://sentiwatch-api.onrender.com` |
-| `INTERNAL_API_KEY` | Same value you set on Render |
-| `SUPABASE_URL` | Same as Render |
-| `SUPABASE_KEY` | Same as Render |
-| `SUPABASE_SERVICE_ROLE` | Same as Render |
+Required Secret Manager secrets:
 
-### Test it
-Actions tab → **Hourly Reputation Pipeline** → **Run workflow**. Watch the logs:
-you should see the warmup ("🌡️ Backend awake"), then per-entity sync/analyze/risk.
+| Name | Purpose |
+| --- | --- |
+| `SUPABASE_SERVICE_ROLE` | Privileged backend database operations |
+| `INTERNAL_API_KEY` | `X-Internal-Key` authentication for internal routes |
+| `GOOGLE_API_KEY` | Gemini crisis agent |
+| `GROQ_API_KEY` | Existing sentiment and recommendation provider |
+| `TAVILY_API_KEY` | Web context search |
+| `RESEND_API_KEY` | Email alerts and digests |
 
-> First run after idle is slow: Render cold-starts (~30-50s). The warmup step in
-> `cron_sync.py` handles this, but expect the first hit to lag.
+Optional sensitive secrets:
 
----
+| Name | Purpose |
+| --- | --- |
+| `AGENTROUTER_API_KEY` | Optional OpenAI-compatible provider credential |
+| `APIFY_TOKEN` | Optional X/Facebook actors |
+| `YOUTUBE_API_KEY` | Optional YouTube ingestion |
+| `ALERT_EMAIL_FALLBACK` | Optional alert recipient when treated as sensitive |
 
-## Part 3 — Point the frontend at the new backend
+Required normal environment configuration:
 
-On **Vercel** → project → Settings → Environment Variables, update:
+| Name | Recommended value |
+| --- | --- |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_KEY` | Supabase anon/publishable key |
+| `ALLOWED_ORIGINS` | Exact comma-separated Vercel and custom-domain origins |
+| `CRISIS_AGENT_MODEL` | `gemini-3.5-flash` |
+| `CRISIS_AGENT_TIMEOUT_SECONDS` | `45` |
+| `CRISIS_AGENT_EVIDENCE_LIMIT` | `20` |
 
-- `NEXT_PUBLIC_API_URL` = your Render URL (e.g. `https://sentiwatch-api.onrender.com`)
+Cloud Run manages `PORT`. Do not configure or hardcode it. The container starts
+one Uvicorn worker and reads the injected value at runtime.
 
-Redeploy the frontend. Also update Render's CORS if it pins origins (check
-`allow_origins` in `backend/main.py`) so your Vercel domain is allowed.
+Existing optional/tuning configuration:
 
----
+| Name | Default or purpose |
+| --- | --- |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` |
+| `RELEVANCE_MODEL` | Defaults to `GROQ_MODEL` |
+| `SENTIMENT_MODEL` | Defaults to `GROQ_MODEL` |
+| `RECOMMENDATION_MODEL` | Defaults to `GROQ_MODEL` |
+| `AGENTROUTER_BASE_URL` | Optional provider base URL |
+| `LLM_MAX_RETRIES` | `3` |
+| `LLM_REQUEST_TIMEOUT` | `15` seconds |
+| `LLM_BACKOFF_BASE_SECONDS` | `1` second |
+| `SENTIMENT_BATCH_LIMIT` | `2` |
+| `SCORING_WINDOW_DAYS` | `90` |
+| `MAX_SCORING_MENTIONS` | `500` |
+| `ALERT_COOLDOWN_HOURS` | `6` |
+| `PIPELINE_LEASE_SECONDS` | `900` |
+| `MAX_ENTITIES_PER_USER` | `10` |
+| `MAX_COMPETITORS_PER_ENTITY` | `3` |
+| `USER_MUTATION_LIMIT_PER_MINUTE` | `10` |
+| `APIFY_TWITTER_ACTOR` | Optional actor ID |
+| `APIFY_FACEBOOK_ACTOR` | Optional actor ID |
+| `ENABLE_MOCK_REVIEWS` | Keep `false` in production |
 
-## Free-tier behavior to expect
+## 3. Build the container
 
-- **Cold starts:** the backend sleeps after ~15 min idle. The first request
-  (from a user or the cron) wakes it in ~30-50s. Your frontend's polling loop
-  already shows loading states, so this reads as normal warmup.
-- **Entity creation** (`POST /entities`) triggers its pipeline via FastAPI
-  `BackgroundTasks` on the Render service itself — that still works
-  independently of the GitHub cron.
+Build from the backend directory so the repository frontend and local artifacts
+never enter the image context:
 
----
+```bash
+IMAGE="europe-west1-docker.pkg.dev/${PROJECT_ID}/sentiwatch/backend:${IMAGE_TAG}"
+gcloud builds submit backend --tag "${IMAGE}"
+```
 
-## Scheduled pipeline reliability
+The image uses `python:3.13-slim`, installs `backend/requirements.txt`, runs as
+numeric non-root user `10001`, and starts `main:app` from `/app`.
 
-`cron_sync.py` inventories monitored entities with the Supabase service-role
-client so user-scoped RLS cannot hide them. Both Render and GitHub Actions must
-have `SUPABASE_SERVICE_ROLE`; privileged backend work now fails clearly when it
-is absent instead of silently falling back to the anon client.
+## 4. Deploy Cloud Run
 
-Each entity runs through scrape, analysis, and risk calculation sequentially.
-The default scrape timeout is 300 seconds, which covers the two synchronous
-Apify actor calls. Override `PIPELINE_SYNC_TIMEOUT`,
-`PIPELINE_ANALYZE_TIMEOUT`, or `PIPELINE_RISK_TIMEOUT` in the Actions workflow
-if provider latency changes. A failed stage stops that entity, continues with
-the remaining entities, and makes the workflow fail after reporting totals.
+Deploy the built image with this service shape:
+
+```bash
+gcloud run deploy sentiwatch-api \
+  --image "${IMAGE}" \
+  --region europe-west1 \
+  --platform managed \
+  --service-account "sentiwatch-run@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --allow-unauthenticated \
+  --ingress all \
+  --cpu 1 \
+  --memory 1Gi \
+  --concurrency 4 \
+  --timeout 360s \
+  --min-instances 0 \
+  --max-instances 1 \
+  --cpu-throttling \
+  --set-secrets "SUPABASE_SERVICE_ROLE=SUPABASE_SERVICE_ROLE:latest,INTERNAL_API_KEY=INTERNAL_API_KEY:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest,GROQ_API_KEY=GROQ_API_KEY:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest,RESEND_API_KEY=RESEND_API_KEY:latest" \
+  --set-env-vars "SUPABASE_URL=${SUPABASE_URL},SUPABASE_KEY=${SUPABASE_KEY},ALLOWED_ORIGINS=${ALLOWED_ORIGINS},CRISIS_AGENT_MODEL=gemini-3.5-flash,CRISIS_AGENT_TIMEOUT_SECONDS=45,CRISIS_AGENT_EVIDENCE_LIMIT=20,ENABLE_MOCK_REVIEWS=false"
+```
+
+Configure the Cloud Run startup probe as HTTP `GET /`. Use `GET /health/ready`
+as the post-deployment readiness check. The readiness endpoint validates required
+configuration and Supabase connectivity but does not call Gemini.
+
+The recommended hackathon configuration is:
+
+| Setting | Value |
+| --- | --- |
+| Region | `europe-west1` |
+| CPU | `1` |
+| Memory | `1 GiB` |
+| Concurrency | `4` |
+| Request timeout | `360 seconds` |
+| Minimum instances | `0` |
+| Maximum instances | `1` |
+| CPU allocation | Request-based |
+| Ingress | Public HTTPS |
+| Startup probe | `GET /` |
+| Readiness | `GET /health/ready` |
+
+Public ingress is required because the Vercel frontend calls the API. User routes
+continue to require Supabase JWTs, and machine routes continue to require the
+constant-time-checked `X-Internal-Key` header.
+
+## 5. Validate the revision
+
+Get the service URL and test health:
+
+```bash
+BACKEND_URL="$(gcloud run services describe sentiwatch-api \
+  --region europe-west1 \
+  --format='value(status.url)')"
+
+curl --fail --show-error "${BACKEND_URL}/"
+curl --fail --show-error "${BACKEND_URL}/health/ready"
+```
+
+Then manually dispatch the hourly workflow and confirm this order in its logs:
+
+```text
+sync -> analyze -> calculate-risk -> process-crisis
+```
+
+## 6. GitHub Actions and Vercel
+
+No workflow code change is required. Set the existing GitHub Actions
+`BACKEND_URL` secret to the Cloud Run service URL. Keep the existing
+`INTERNAL_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, and
+`SUPABASE_SERVICE_ROLE` secrets because `cron_sync.py` authenticates internal
+requests and inventories entities.
+
+`GOOGLE_API_KEY` must not be placed in GitHub Actions. Gemini executes inside
+the Cloud Run backend only.
+
+Set Vercel `NEXT_PUBLIC_API_URL` to the Cloud Run URL and redeploy the frontend.
+No backend credentials or provider API keys belong in frontend variables.
+
+## 7. Operational notes
+
+The scheduled pipeline and crisis agent run inside active HTTP requests and are
+compatible with request-based CPU allocation. User-triggered FastAPI
+`BackgroundTasks` remain in-process and can be interrupted by scale-to-zero,
+revision replacement, or instance shutdown. Existing database leases and the
+hourly recovery endpoint limit permanent loss, but this is not a durable queue.
+
+With minimum instances set to zero, expect cold starts. The hourly workflow
+already warms `/health/ready` before processing. Maximum instances is limited to
+one because mutation throttles and scheduling locks are currently process-local.
+
+## 8. Render rollback
+
+Do not remove `render.yaml` or delete the Render service. To roll back:
+
+```text
+Cloud Run issue
+  -> restore GitHub BACKEND_URL to the Render service URL
+  -> restore Vercel NEXT_PUBLIC_API_URL to the Render service URL
+  -> redeploy the frontend
+  -> Render resumes the backend role
+```
+
+Ensure Render has the same required runtime secrets, including
+`GOOGLE_API_KEY`, before using it as the crisis-agent fallback. Point the hourly
+workflow at only one backend target at a time.

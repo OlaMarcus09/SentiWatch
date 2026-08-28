@@ -24,6 +24,7 @@ from scrapers import (
 )
 from sentiment import analyze_and_store_sentiment, reprocess_existing_sentiment
 from risk_engine import calculate_risk_and_alert, send_daily_digests
+from services.crisis_agent import process_crisis_brief
 
 # PIVOT TODO: Import your new search service here once you create the file
 # from services.search_service import fetch_entity_context
@@ -417,7 +418,12 @@ def check_db_connection():
 @app.get("/health/ready")
 def readiness_check():
     missing = [
-        key for key in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE", "INTERNAL_API_KEY")
+        key for key in (
+            "SUPABASE_URL",
+            "SUPABASE_SERVICE_ROLE",
+            "INTERNAL_API_KEY",
+            "GOOGLE_API_KEY",
+        )
         if not os.getenv(key)
     ]
     if not (os.getenv("GROQ_API_KEY") or (
@@ -1122,6 +1128,56 @@ def recover_stale_pipelines(background_tasks: BackgroundTasks, limit: int = 10):
         "claimed": len(claimed),
         "entity_ids": [run["entity_id"] for run in claimed],
     }
+
+
+@app.post(
+    "/internal/process-crisis/{entity_id}",
+    dependencies=[Depends(verify_internal_key)],
+)
+async def trigger_crisis_processing(entity_id: str):
+    """Process one pending brief, or retry one failed brief when none are pending."""
+    try:
+        rows = []
+        for eligible_status in ("pending", "failed"):
+            result = (
+                supabase_admin.table("crisis_briefs")
+                .select("id")
+                .eq("entity_id", entity_id)
+                .eq("status", eligible_status)
+                .order("created_at", desc=False)
+                .limit(1)
+                .execute()
+            )
+            rows = result.data or []
+            if rows:
+                break
+    except Exception as exc:
+        logging.warning("Could not select crisis brief for entity %s", entity_id)
+        raise HTTPException(status_code=500, detail="Could not select crisis brief") from exc
+
+    if not rows:
+        return {
+            "found": False,
+            "crisis_brief_id": None,
+            "status": "no_pending_brief",
+        }
+
+    crisis_brief_id = rows[0]["id"]
+    processing_result = await asyncio.to_thread(
+        process_crisis_brief,
+        crisis_brief_id,
+    )
+    response = {
+        "found": True,
+        "crisis_brief_id": crisis_brief_id,
+        "status": processing_result.get("status", "failed"),
+    }
+    if processing_result.get("reason"):
+        response["reason"] = processing_result["reason"]
+    if processing_result.get("code"):
+        response["code"] = processing_result["code"]
+    return response
+
 
 @app.post("/calculate-risk/{entity_id}", dependencies=[Depends(verify_internal_key)])
 def trigger_risk_calculation(

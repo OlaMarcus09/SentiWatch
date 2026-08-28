@@ -349,7 +349,7 @@ def _normalise_source(raw: str) -> str:
 # ──────────────────────────────────────────────────────
 # Save Risk Score
 # ──────────────────────────────────────────────────────
-def save_risk_score(entity_id: str, score: dict):
+def save_risk_score(entity_id: str, score: dict) -> str | None:
     payload = {
         "entity_id": entity_id,
         "score": score["score"],
@@ -364,12 +364,14 @@ def save_risk_score(entity_id: str, score: dict):
     try:
         # Risk scores are snapshots, not mutable entity state. Keeping every
         # calculation makes trend deltas and incident timelines meaningful.
-        (
+        result = (
             supabase_admin
             .table("risk_scores")
             .insert(payload)
             .execute()
         )
+        rows = result.data or []
+        return str(rows[0]["id"]) if rows and rows[0].get("id") else None
     except Exception as e:
         # Backward-compatible fallback for deployments that still enforce a
         # unique(entity_id) constraint. Apply the bundled migration to enable
@@ -382,6 +384,7 @@ def save_risk_score(entity_id: str, score: dict):
             .eq("entity_id", entity_id)
             .execute()
         )
+        return None
 
 
 # ──────────────────────────────────────────────────────
@@ -395,6 +398,80 @@ def is_alert_event(score: dict, previous_score: int | None, previous_status: str
     if not previous_status:
         return False
     return STATUS_RANK.get(score.get("status"), 0) > STATUS_RANK.get(previous_status, 0)
+
+
+def create_pending_crisis_brief(
+    entity: dict,
+    score: dict,
+    risk_snapshot_id: str | None,
+    previous_score: int | None = None,
+    previous_status: str | None = None,
+) -> bool:
+    """Reserve one future agent investigation for a new high-risk event."""
+    if not risk_snapshot_id or not is_alert_event(score, previous_score, previous_status):
+        return False
+
+    event_type = (
+        "risk_threshold"
+        if previous_score is None or previous_score < EMAIL_ALERT_THRESHOLD
+        else "risk_escalation"
+    )
+    payload = {
+        "entity_id": entity["id"],
+        "risk_snapshot_id": risk_snapshot_id,
+        "event_key": f"risk:{entity['id']}:{risk_snapshot_id}",
+        "event_type": event_type,
+        "status": "pending",
+        "incident_title": f"{entity['name']} reputation risk is {score['status']}",
+        "summary": score.get("root_cause_summary") or None,
+        "severity": score["status"],
+        "evidence_summary": (
+            f"{score.get('negative_mentions', 0)} negative, "
+            f"{score.get('positive_mentions', 0)} positive, and "
+            f"{score.get('neutral_mentions', 0)} neutral mentions."
+        ),
+    }
+
+    try:
+        result = (
+            supabase_admin.table("crisis_briefs")
+            .upsert(payload, on_conflict="event_key", ignore_duplicates=True)
+            .execute()
+        )
+        return bool(result.data)
+    except Exception as exc:
+        logging.warning(
+            "Could not reserve crisis brief for risk snapshot %s: %s",
+            risk_snapshot_id,
+            exc,
+        )
+        return False
+
+
+def mark_crisis_brief_failed(
+    brief_id: str,
+    error_message: str,
+    error_details: dict | None = None,
+) -> bool:
+    """Persist a future agent failure without raising into the risk pipeline."""
+    try:
+        failed_at = datetime.now(timezone.utc).isoformat()
+        result = (
+            supabase_admin.table("crisis_briefs")
+            .update({
+                "status": "failed",
+                "error_message": str(error_message)[:1000],
+                "error_details": error_details or {},
+                "updated_at": failed_at,
+                "completed_at": failed_at,
+            })
+            .eq("id", brief_id)
+            .execute()
+        )
+        return bool(result.data)
+    except Exception as exc:
+        logging.warning("Could not mark crisis brief %s as failed: %s", brief_id, exc)
+        return False
 
 
 def create_risk_notification(entity: dict, score: dict, previous_score: int | None = None, previous_status: str | None = None) -> bool:
@@ -624,8 +701,9 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
         previous_snapshot.get(field) != metrics.get(field)
         for field in snapshot_fields
     )
+    risk_snapshot_id = None
     if snapshot_changed:
-        save_risk_score(entity_id, metrics)
+        risk_snapshot_id = save_risk_score(entity_id, metrics)
 
     final_score = metrics["score"]
     brand_name = entity["name"]
@@ -663,6 +741,13 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
             "root_cause_summary": metrics.get("root_cause_summary", "")
         }).execute()
 
+    crisis_brief_created = create_pending_crisis_brief(
+        entity,
+        metrics,
+        risk_snapshot_id,
+        previous_score,
+        previous_status,
+    )
     notification_created = create_risk_notification(entity, metrics, previous_score, previous_status)
     alert_sent = send_email(entity, metrics, previous_score, previous_status)
 
@@ -679,6 +764,7 @@ def calculate_risk_and_alert(entity_id: str) -> dict:
         "category_breakdown": metrics.get("category_breakdown", {}),
         "snapshot_created": snapshot_changed,
         "recommendation_generated": snapshot_changed,
+        "crisis_brief_created": crisis_brief_created,
         "email_sent": alert_sent,
         "notification_created": notification_created,
     }

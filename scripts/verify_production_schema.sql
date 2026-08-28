@@ -7,7 +7,7 @@ where relnamespace = 'public'::regnamespace
   and relname in (
     'users', 'monitored_entities', 'competitor_links', 'mentions',
     'sentiment_results', 'risk_scores', 'recommendations', 'pipeline_runs',
-    'notification_preferences', 'notifications'
+    'notification_preferences', 'notifications', 'crisis_briefs'
   )
 order by relname;
 
@@ -17,7 +17,7 @@ where schemaname = 'public'
   and tablename in (
     'users', 'monitored_entities', 'competitor_links', 'mentions',
     'sentiment_results', 'risk_scores', 'recommendations', 'pipeline_runs',
-    'notification_preferences', 'notifications'
+    'notification_preferences', 'notifications', 'crisis_briefs'
   )
 order by tablename, policyname;
 
@@ -34,10 +34,13 @@ select indexname
 from pg_indexes
 where schemaname = 'public'
   and indexname in (
-    'monitored_entities_user_idx', 'mentions_entity_created_idx',
+    'monitored_entities_user_idx', 'risk_scores_id_entity_unique_idx',
+    'mentions_entity_created_idx',
     'mentions_entity_status_created_idx', 'sentiment_results_mention_idx',
     'recommendations_entity_created_idx', 'competitor_links_primary_idx',
-    'mentions_entity_tavily_snapshot_unique'
+    'mentions_entity_tavily_snapshot_unique',
+    'crisis_briefs_entity_created_idx', 'crisis_briefs_event_key_idx',
+    'crisis_briefs_status_idx', 'crisis_briefs_created_idx'
   )
 order by indexname;
 
@@ -56,4 +59,19 @@ union all
 select 'recommendation_without_entity', recommendation.id
 from public.recommendations recommendation
 left join public.monitored_entities entity on entity.id = recommendation.entity_id
-where entity.id is null;
+where entity.id is null
+union all
+select 'crisis_brief_without_entity', brief.id
+from public.crisis_briefs brief
+left join public.monitored_entities entity on entity.id = brief.entity_id
+where entity.id is null
+union all
+select 'crisis_brief_without_risk_snapshot', brief.id
+from public.crisis_briefs brief
+left join public.risk_scores score on score.id = brief.risk_snapshot_id
+where score.id is null
+union all
+select 'crisis_brief_risk_entity_mismatch', brief.id
+from public.crisis_briefs brief
+join public.risk_scores score on score.id = brief.risk_snapshot_id
+where score.entity_id <> brief.entity_id;

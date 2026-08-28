@@ -29,6 +29,7 @@ ANALYZE_BATCH_LIMIT = max(
     min(20, int(os.getenv("PIPELINE_ANALYZE_BATCH_LIMIT", "2"))),
 )
 RISK_TIMEOUT = int(os.getenv("PIPELINE_RISK_TIMEOUT", "60"))
+CRISIS_TIMEOUT = int(os.getenv("PIPELINE_CRISIS_TIMEOUT", "75"))
 
 # Sent on every internal POST so the backend's verify_internal_key
 # dependency accepts these machine-to-machine calls.
@@ -305,6 +306,11 @@ def run_automated_pipeline():
                     f"/calculate-risk/{entity_id}",
                     RISK_TIMEOUT,
                     "risk calculation",
+                ),
+                (
+                    f"/internal/process-crisis/{entity_id}",
+                    CRISIS_TIMEOUT,
+                    "crisis processing",
                 ),
             )
 

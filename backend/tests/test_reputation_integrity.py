@@ -153,7 +153,7 @@ class ReputationIntegrityTests(unittest.TestCase):
         recovery = MagicMock(status_code=200)
         recovery.json.return_value = {"entity_ids": []}
         stage_results = [
-            {"pipeline_run_id": "run-a", "worker_token": "token-a"}, {}, {},
+            {"pipeline_run_id": "run-a", "worker_token": "token-a"}, {}, {}, {},
             {"pipeline_run_id": "run-b", "worker_token": "token-b"}, False,
         ]
 
@@ -651,6 +651,131 @@ class ReputationIntegrityTests(unittest.TestCase):
         self.assertFalse(risk_engine.is_alert_event(
             {"score": 75, "status": "high"}, previous_score=68, previous_status="high"
         ))
+
+    def test_high_risk_event_creates_pending_crisis_brief(self):
+        query = MagicMock()
+        query.upsert.return_value.execute.return_value.data = [{"id": "brief-a"}]
+        admin = MagicMock()
+        admin.table.return_value = query
+        score = {
+            "score": 68,
+            "status": "high",
+            "negative_mentions": 3,
+            "positive_mentions": 1,
+            "neutral_mentions": 2,
+            "root_cause_summary": "Top drivers: Operations outage",
+        }
+
+        with patch.object(risk_engine, "supabase_admin", admin):
+            created = risk_engine.create_pending_crisis_brief(
+                {"id": "entity-a", "name": "Example"},
+                score,
+                "snapshot-a",
+                previous_score=45,
+                previous_status="elevated",
+            )
+
+        self.assertTrue(created)
+        payload = query.upsert.call_args.args[0]
+        self.assertEqual(payload["status"], "pending")
+        self.assertEqual(payload["severity"], "high")
+        self.assertEqual(payload["risk_snapshot_id"], "snapshot-a")
+        self.assertEqual(payload["event_key"], "risk:entity-a:snapshot-a")
+        query.upsert.assert_called_once_with(
+            payload, on_conflict="event_key", ignore_duplicates=True
+        )
+
+    def test_lower_risk_event_does_not_create_crisis_brief(self):
+        admin = MagicMock()
+        with patch.object(risk_engine, "supabase_admin", admin):
+            created = risk_engine.create_pending_crisis_brief(
+                {"id": "entity-a", "name": "Example"},
+                {"score": 55, "status": "elevated"},
+                "snapshot-a",
+                previous_score=35,
+                previous_status="watch",
+            )
+
+        self.assertFalse(created)
+        admin.table.assert_not_called()
+
+    def test_duplicate_crisis_event_key_is_skipped_safely(self):
+        query = MagicMock()
+        query.upsert.return_value.execute.return_value.data = []
+        admin = MagicMock()
+        admin.table.return_value = query
+
+        with patch.object(risk_engine, "supabase_admin", admin):
+            created = risk_engine.create_pending_crisis_brief(
+                {"id": "entity-a", "name": "Example"},
+                {"score": 82, "status": "critical"},
+                "snapshot-a",
+                previous_score=68,
+                previous_status="high",
+            )
+
+        self.assertFalse(created)
+        self.assertEqual(
+            query.upsert.call_args.args[0]["event_key"],
+            "risk:entity-a:snapshot-a",
+        )
+
+    def test_crisis_brief_failure_status_can_be_persisted(self):
+        query = MagicMock()
+        query.update.return_value.eq.return_value.execute.return_value.data = [
+            {"id": "brief-a", "status": "failed"}
+        ]
+        admin = MagicMock()
+        admin.table.return_value = query
+
+        with patch.object(risk_engine, "supabase_admin", admin):
+            updated = risk_engine.mark_crisis_brief_failed(
+                "brief-a",
+                "provider unavailable",
+                {"provider": "future-agent"},
+            )
+
+        self.assertTrue(updated)
+        payload = query.update.call_args.args[0]
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error_message"], "provider unavailable")
+        self.assertEqual(payload["error_details"], {"provider": "future-agent"})
+
+    def test_crisis_brief_persistence_failure_does_not_change_risk_behavior(self):
+        admin = MagicMock()
+        admin.table.return_value.upsert.side_effect = RuntimeError("table unavailable")
+        score = {"score": 82, "status": "critical"}
+
+        with patch.object(risk_engine, "supabase_admin", admin):
+            created = risk_engine.create_pending_crisis_brief(
+                {"id": "entity-a", "name": "Example"},
+                score,
+                "snapshot-a",
+                previous_score=68,
+                previous_status="high",
+            )
+
+        self.assertFalse(created)
+        self.assertTrue(risk_engine.is_alert_event(
+            score, previous_score=68, previous_status="high"
+        ))
+
+    def test_crisis_brief_migration_enforces_snapshot_entity_match(self):
+        migration = (
+            BACKEND_DIR.parent / "scripts" / "2026-08-28_crisis_briefs.sql"
+        ).read_text()
+        normalized = " ".join(migration.split()).lower()
+
+        self.assertIn(
+            "create unique index if not exists risk_scores_id_entity_unique_idx "
+            "on public.risk_scores (id, entity_id)",
+            normalized,
+        )
+        self.assertIn(
+            "foreign key (risk_snapshot_id, entity_id) references "
+            "public.risk_scores (id, entity_id) on delete cascade",
+            normalized,
+        )
 
 
 if __name__ == "__main__":
