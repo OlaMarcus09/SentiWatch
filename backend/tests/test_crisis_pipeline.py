@@ -204,6 +204,45 @@ class CrisisPipelineEndpointTests(unittest.TestCase):
         self.assertIs(result, expected)
 
 
+class ReadinessEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(api_main.app)
+
+    def test_readiness_requires_google_api_key(self):
+        configured = {
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_SERVICE_ROLE": "test-service-role",
+            "INTERNAL_API_KEY": "test-internal-key",
+            "GROQ_API_KEY": "test-groq-key",
+        }
+        admin = MagicMock()
+        with patch.dict(os.environ, configured, clear=True), patch.object(
+            api_main, "supabase_admin", admin
+        ):
+            response = self.client.get("/health/ready")
+
+        self.assertEqual(response.status_code, 503)
+        admin.table.assert_not_called()
+
+    def test_readiness_succeeds_with_required_configuration(self):
+        configured = {
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_SERVICE_ROLE": "test-service-role",
+            "INTERNAL_API_KEY": "test-internal-key",
+            "GOOGLE_API_KEY": "test-google-key",
+            "GROQ_API_KEY": "test-groq-key",
+        }
+        admin = MagicMock()
+        with patch.dict(os.environ, configured, clear=True), patch.object(
+            api_main, "supabase_admin", admin
+        ):
+            response = self.client.get("/health/ready")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ready"})
+        admin.table.assert_called_once_with("monitored_entities")
+
+
 class CrisisPipelineCronTests(unittest.TestCase):
     def test_crisis_stage_runs_after_successful_risk_calculation(self):
         recovery = MagicMock(status_code=200)
